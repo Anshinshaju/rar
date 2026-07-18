@@ -1,0 +1,15 @@
+services:
+  - type: web_service
+    name: rar-backend
+    env: node
+    branch: main
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    instanceType: starter
+
+  - type: static_site
+    name: rar-frontend
+    branch: main
+    buildCommand: npm install && npm run build
+    publishPath: client/dist
+    instanceType: starter
