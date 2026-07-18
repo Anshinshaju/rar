@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 
 const API = 'https://rar-9k26.onrender.com/api';
+const NOMINATIM = 'https://nominatim.openstreetmap.org/search';
+const OSRM = 'https://router.project-osrm.org/route/v1/driving';
 
 const emptyForm = {
   name: '',
   username: '',
   password: '',
   travelMinutes: 15,
+  locationAddress: '',
+  latitude: '',
+  longitude: '',
   role: 'patient',
   destination: 'doctor',
   hospitalId: '',
@@ -98,6 +103,74 @@ function getLeaveStatus(waitMinutes, travelMinutes) {
   };
 }
 
+function hasCoords(place) {
+  return Number.isFinite(Number(place?.latitude)) && Number.isFinite(Number(place?.longitude));
+}
+
+function getCurrentPosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('Current location is not supported in this browser.'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => resolve({
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude
+      }),
+      () => reject(new Error('Location permission was blocked or unavailable.')),
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 }
+    );
+  });
+}
+
+function distanceKm(from, to) {
+  const radius = 6371;
+  const toRad = (value) => (Number(value) * Math.PI) / 180;
+  const dLat = toRad(to.latitude - from.latitude);
+  const dLon = toRad(to.longitude - from.longitude);
+  const lat1 = toRad(from.latitude);
+  const lat2 = toRad(to.latitude);
+  const a = Math.sin(dLat / 2) ** 2 + Math.sin(dLon / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2);
+  return radius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+async function getRouteTravel(from, to) {
+  const fallbackKm = distanceKm(from, to);
+  try {
+    const response = await fetch(`${OSRM}/${from.longitude},${from.latitude};${to.longitude},${to.latitude}?overview=false`);
+    const data = await response.json();
+    const route = data.routes?.[0];
+    if (route) {
+      return {
+        minutes: Math.max(1, Math.round(route.duration / 60)),
+        distanceKm: route.distance / 1000,
+        source: 'route'
+      };
+    }
+  } catch {
+    // Fall through to straight-line estimate when the public router is unavailable.
+  }
+
+  return {
+    minutes: Math.max(1, Math.round((fallbackKm / 28) * 60)),
+    distanceKm: fallbackKm,
+    source: 'estimate'
+  };
+}
+
+async function geocodeAddress(address) {
+  const response = await fetch(`${NOMINATIM}?format=json&limit=1&q=${encodeURIComponent(address)}`);
+  const data = await response.json();
+  const match = data[0];
+  if (!match) throw new Error('Could not find that location on the map.');
+  return {
+    latitude: Number(match.lat),
+    longitude: Number(match.lon),
+    label: match.display_name
+  };
+}
+
 function titleRole(role) {
   return role ? role[0].toUpperCase() + role.slice(1) : '';
 }
@@ -116,6 +189,9 @@ function App() {
   const [eta, setEta] = useState(null);
   const [patientTokens, setPatientTokens] = useState([]);
   const [editingTarget, setEditingTarget] = useState(null);
+  const [userLocation, setUserLocation] = useState(null);
+  const [travelInfo, setTravelInfo] = useState(null);
+  const [locationBusy, setLocationBusy] = useState(false);
 
   useEffect(() => {
     const onHashChange = () => setRoute(getRoute());
@@ -220,6 +296,48 @@ function App() {
     [status.labs, currentUser]
   );
 
+  const hospitalProfile = useMemo(
+    () => hospitals.find((hospital) => hospital.id === currentUser?.hospital_id),
+    [hospitals, currentUser]
+  );
+
+  useEffect(() => {
+    if (!userLocation || !selectedHospital || !hasCoords(selectedHospital)) {
+      setTravelInfo(null);
+      return;
+    }
+
+    let active = true;
+    setTravelInfo((prev) => ({ ...(prev || {}), loading: true, hospitalId: selectedHospital.id }));
+    getRouteTravel(userLocation, {
+      latitude: Number(selectedHospital.latitude),
+      longitude: Number(selectedHospital.longitude)
+    })
+      .then((info) => {
+        if (!active) return;
+        setTravelInfo({ ...info, hospitalId: selectedHospital.id, loading: false });
+        setForm((prev) => ({ ...prev, travelMinutes: info.minutes }));
+      })
+      .catch((error) => {
+        if (active) setMessage(error.message);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [userLocation, selectedHospital?.id, selectedHospital?.latitude, selectedHospital?.longitude]);
+
+  useEffect(() => {
+    if (currentUser?.role === 'hospital' && hospitalProfile) {
+      setForm((prev) => ({
+        ...prev,
+        locationAddress: hospitalProfile.location_address || '',
+        latitude: hospitalProfile.latitude ?? '',
+        longitude: hospitalProfile.longitude ?? ''
+      }));
+    }
+  }, [currentUser?.role, hospitalProfile?.id, hospitalProfile?.location_address, hospitalProfile?.latitude, hospitalProfile?.longitude]);
+
   async function submitLogin(event) {
     event.preventDefault();
     try {
@@ -246,8 +364,11 @@ function App() {
           name: form.name,
           username: form.username,
           password: form.password,
-          travelMinutes: form.travelMinutes,
-          branch: form.branch
+          travelMinutes: form.role === 'patient' ? 0 : form.travelMinutes,
+          branch: form.branch,
+          locationAddress: form.locationAddress,
+          latitude: form.latitude,
+          longitude: form.longitude
         })
       });
       setMessage(`${titleRole(form.role)} registered. Please log in.`);
@@ -270,6 +391,10 @@ function App() {
   async function submitToken(event) {
     event.preventDefault();
     try {
+      if (hasCoords(selectedHospital) && (!travelInfo || travelInfo.loading || travelInfo.hospitalId !== selectedHospital.id)) {
+        setMessage('Use current location first so travel time can be calculated.');
+        return;
+      }
       const data = await api('/tokens', {
         method: 'POST',
         body: JSON.stringify({
@@ -459,6 +584,60 @@ function App() {
     }
   }
 
+  async function useCurrentLocation() {
+    setLocationBusy(true);
+    try {
+      const location = await getCurrentPosition();
+      setUserLocation(location);
+      setMessage('Current location ready.');
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setLocationBusy(false);
+    }
+  }
+
+  async function geocodeHospitalLocation(event) {
+    event?.preventDefault();
+    if (!form.locationAddress.trim()) {
+      setMessage('Enter the hospital address first.');
+      return;
+    }
+    setLocationBusy(true);
+    try {
+      const location = await geocodeAddress(form.locationAddress);
+      setForm((prev) => ({
+        ...prev,
+        locationAddress: location.label,
+        latitude: location.latitude,
+        longitude: location.longitude
+      }));
+      setMessage('Map location found.');
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setLocationBusy(false);
+    }
+  }
+
+  async function saveHospitalLocation(event) {
+    event.preventDefault();
+    try {
+      await api(`/hospitals/${currentUser.hospital_id}/location`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          locationAddress: form.locationAddress,
+          latitude: form.latitude,
+          longitude: form.longitude
+        })
+      });
+      setMessage('Hospital location saved.');
+      refresh();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
   const pageProps = {
     adminData,
     currentUser,
@@ -469,6 +648,7 @@ function App() {
     form,
     hospitalDoctors,
     hospitalLabs,
+    hospitalProfile,
     hospitals,
     labAction,
     labUser,
@@ -486,9 +666,15 @@ function App() {
     deleteLab,
     editDoctor,
     editLab,
+    geocodeHospitalLocation,
     cancelEdit,
     editingTarget,
-    deleteToken
+    deleteToken,
+    locationBusy,
+    saveHospitalLocation,
+    travelInfo,
+    useCurrentLocation,
+    userLocation
   };
 
   return (
@@ -565,7 +751,7 @@ function LoginPage({ form, setForm, submitLogin }) {
   );
 }
 
-function RegisterPage({ form, setForm, submitRegister }) {
+function RegisterPage({ form, geocodeHospitalLocation, locationBusy, setForm, submitRegister }) {
   return (
     <section className="auth-page">
       <div className="panel auth-card">
@@ -578,11 +764,18 @@ function RegisterPage({ form, setForm, submitRegister }) {
           <label>{form.role === 'hospital' ? 'Hospital name' : 'Patient name'}<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
           <label>Username<input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></label>
           <label>Password<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
-          {form.role === 'patient' && (
-            <label>Travel minutes<input type="number" min="0" value={form.travelMinutes} onChange={(event) => setForm({ ...form, travelMinutes: event.target.value })} /></label>
-          )}
           {form.role === 'hospital' && (
-            <label>Hospital branch<input value={form.branch} onChange={(event) => setForm({ ...form, branch: event.target.value })} /></label>
+            <>
+              <label>Hospital branch<input value={form.branch} onChange={(event) => setForm({ ...form, branch: event.target.value })} /></label>
+              <label>Hospital address<input value={form.locationAddress} onChange={(event) => setForm({ ...form, locationAddress: event.target.value })} /></label>
+              <div className="button-row">
+                <button type="button" className="small-button" onClick={geocodeHospitalLocation} disabled={locationBusy}>Find On Map</button>
+              </div>
+              <div className="coordinate-grid">
+                <label>Latitude<input type="number" step="any" value={form.latitude} onChange={(event) => setForm({ ...form, latitude: event.target.value })} /></label>
+                <label>Longitude<input type="number" step="any" value={form.longitude} onChange={(event) => setForm({ ...form, longitude: event.target.value })} /></label>
+              </div>
+            </>
           )}
           <button type="submit">Register {titleRole(form.role)}</button>
         </form>
@@ -592,13 +785,18 @@ function RegisterPage({ form, setForm, submitRegister }) {
   );
 }
 
-function PatientPage({ currentUser, deleteToken, patientTokens, status }) {
+function PatientPage({ currentUser, deleteToken, locationBusy, patientTokens, status, useCurrentLocation, userLocation }) {
   const activeTokens = patientTokens.filter((token) => ['waiting_doctor', 'in_doctor', 'waiting_lab', 'in_lab'].includes(token.status));
   const finishedTokens = patientTokens.filter((token) => token.status === 'finished');
   return (
     <section className="page-grid">
       <div className="panel emphasis">
-        <h2>Active Appointments</h2>
+        <div className="section-title">
+          <h2>Active Appointments</h2>
+          <button type="button" className="small-button" onClick={useCurrentLocation} disabled={locationBusy}>
+            {locationBusy ? 'Locating...' : 'Use Current Location'}
+          </button>
+        </div>
         {activeTokens.length ? (
           <ol className="patient-token-list">
             {activeTokens.map((token) => {
@@ -607,7 +805,13 @@ function PatientPage({ currentUser, deleteToken, patientTokens, status }) {
               const labName = token.lab_name;
               const visitType = token.status.includes('doctor') ? 'Doctor' : 'Lab';
               const waitMinutes = doctor?.avg_wait_with_break_minutes ?? token.avg_wait_with_break_minutes ?? doctor?.avg_wait_minutes ?? token.avg_wait_minutes ?? 0;
-              const travelMinutes = Number(currentUser?.travel_minutes ?? token.patient_travel_minutes) || 0;
+              const hospitalLocation = hasCoords({ latitude: token.hospital_latitude, longitude: token.hospital_longitude })
+                ? { latitude: Number(token.hospital_latitude), longitude: Number(token.hospital_longitude) }
+                : null;
+              const dynamicTravel = userLocation && hospitalLocation
+                ? Math.max(1, Math.round((distanceKm(userLocation, hospitalLocation) / 28) * 60))
+                : null;
+              const travelMinutes = dynamicTravel ?? (Number(currentUser?.travel_minutes ?? token.patient_travel_minutes) || 0);
               const leaveStatus = token.doctor_id && token.status === 'waiting_doctor'
                 ? getLeaveStatus(waitMinutes, travelMinutes)
                 : null;
@@ -631,7 +835,7 @@ function PatientPage({ currentUser, deleteToken, patientTokens, status }) {
                   {labName && token.status.includes('lab') && <div><span>{labName}</span></div>}
                   {leaveStatus && (
                     <div>
-                      <span>Travel {humanTime(travelMinutes)}</span>
+                      <span>Travel {humanTime(travelMinutes)}{dynamicTravel ? ' estimate' : ''}</span>
                       <span>Leave {leaveStatus.headline}</span>
                     </div>
                   )}
@@ -681,11 +885,13 @@ function PatientPage({ currentUser, deleteToken, patientTokens, status }) {
   );
 }
 
-function NewTokenPage({ form, setForm, submitToken, hospitals, selectedHospital, selectedDoctor }) {
+function NewTokenPage({ form, locationBusy, setForm, submitToken, hospitals, selectedHospital, selectedDoctor, travelInfo, useCurrentLocation, userLocation }) {
   const selectedLab = selectedHospital?.labs?.find((lab) => String(lab.id) === String(form.labId));
   const waitMinutes = selectedDoctor?.avg_wait_with_break_minutes ?? selectedDoctor?.avg_wait_minutes ?? 0;
   const travelMinutes = Number(form.travelMinutes) || 0;
-  const leaveStatus = selectedDoctor ? getLeaveStatus(waitMinutes, travelMinutes) : null;
+  const routeReady = Boolean(userLocation && travelInfo && !travelInfo.loading && travelInfo.hospitalId === selectedHospital?.id);
+  const leaveStatus = selectedDoctor && routeReady ? getLeaveStatus(waitMinutes, travelMinutes) : null;
+  const hospitalHasLocation = hasCoords(selectedHospital);
   return (
     <section className="page-grid">
       <div className="panel emphasis">
@@ -707,15 +913,20 @@ function NewTokenPage({ form, setForm, submitToken, hospitals, selectedHospital,
               {hospitals.map((hospital) => <option key={hospital.id} value={hospital.id}>{hospital.name}</option>)}
             </select>
           </label>
-          <label>
-            Travel minutes
-            <input
-              type="number"
-              min="0"
-              value={form.travelMinutes}
-              onChange={(event) => setForm({ ...form, travelMinutes: event.target.value })}
-            />
-          </label>
+          <div className="location-box">
+            <div>
+              <strong>{userLocation ? 'Current location ready' : 'Current location needed'}</strong>
+              <span>{hospitalHasLocation ? selectedHospital.location_address || `${selectedHospital.latitude}, ${selectedHospital.longitude}` : 'Selected hospital has no saved map location.'}</span>
+            </div>
+            <button type="button" className="small-button" onClick={useCurrentLocation} disabled={locationBusy || !hospitalHasLocation}>
+              {locationBusy ? 'Locating...' : 'Use Current Location'}
+            </button>
+            {travelInfo?.loading && <small>Calculating route...</small>}
+            {travelInfo && !travelInfo.loading && (
+              <small>{humanTime(travelInfo.minutes)} by road, {travelInfo.distanceKm.toFixed(1)} km {travelInfo.source === 'estimate' ? 'estimate' : 'route'}</small>
+            )}
+            <small>Maps by OpenStreetMap, routing by OSRM.</small>
+          </div>
           <label>
             Appointment date
             <input
@@ -744,9 +955,9 @@ function NewTokenPage({ form, setForm, submitToken, hospitals, selectedHospital,
                   <div><strong>Queue length</strong> {selectedDoctor.queue_length}</div>
                   <div><strong>Estimated wait</strong> {selectedDoctor.avg_wait_minutes} min</div>
                   <div><strong>Wait with breaks</strong> {selectedDoctor.avg_wait_with_break_minutes} min</div>
-                  <div><strong>Leave in</strong> {humanTime(leaveStatus.leaveInMinutes)}</div>
-                  <div><strong>Leave at</strong> {leaveStatus.leaveAt}</div>
-                  <div><strong>Travel time</strong> {travelMinutes} min</div>
+                  <div><strong>Travel time</strong> {routeReady ? humanTime(travelMinutes) : 'Use current location'}</div>
+                  {leaveStatus && <div><strong>Leave in</strong> {humanTime(leaveStatus.leaveInMinutes)}</div>}
+                  {leaveStatus && <div><strong>Leave at</strong> {leaveStatus.leaveAt}</div>}
                   {leaveStatus && <TimeStatus status={leaveStatus} />}
                   <div><strong>Fee</strong> ₹{selectedDoctor.consultation_fee ?? 0}</div>
                 </div>
@@ -778,7 +989,7 @@ function NewTokenPage({ form, setForm, submitToken, hospitals, selectedHospital,
         <div className="doctor-summary">
           <div><strong>Queue</strong> {form.destination === 'doctor' ? 'Doctor' : 'Lab'}</div>
           <div><strong>Date</strong> {form.tokenDate}</div>
-          <div><strong>Travel</strong> {form.travelMinutes} min</div>
+          <div><strong>Travel</strong> {routeReady ? humanTime(travelMinutes) : 'Use current location'}</div>
           <div><strong>Destination</strong> {form.destination === 'doctor' ? selectedDoctor?.name || 'Not selected' : selectedLab?.name || 'Not selected'}</div>
           {selectedDoctor && <div><strong>Consultation fee</strong> ₹{selectedDoctor.consultation_fee ?? 0}</div>}
           {selectedDoctor && leaveStatus && <TimeStatus status={leaveStatus} />}
@@ -804,9 +1015,28 @@ function TimeStatus({ status }) {
   );
 }
 
-function HospitalPage({ createDoctor, createLab, form, hospitalDoctors, hospitalLabs, setForm, deleteDoctor, deleteLab, editDoctor, editLab, cancelEdit, editingTarget }) {
+function HospitalPage({ createDoctor, createLab, form, geocodeHospitalLocation, hospitalDoctors, hospitalLabs, hospitalProfile, locationBusy, saveHospitalLocation, setForm, deleteDoctor, deleteLab, editDoctor, editLab, cancelEdit, editingTarget }) {
   return (
     <>
+      <section className="panel">
+        <div className="section-title">
+          <h2>Hospital Location</h2>
+          {hospitalProfile?.latitude && hospitalProfile?.longitude && <span className="panel-note">Map ready</span>}
+        </div>
+        <form onSubmit={saveHospitalLocation}>
+          <label>Hospital address<input value={form.locationAddress} onChange={(event) => setForm({ ...form, locationAddress: event.target.value })} /></label>
+          <div className="button-row">
+            <button type="button" className="small-button" onClick={geocodeHospitalLocation} disabled={locationBusy}>Find On Map</button>
+            <button type="submit">Save Location</button>
+          </div>
+          <div className="coordinate-grid">
+            <label>Latitude<input type="number" step="any" value={form.latitude} onChange={(event) => setForm({ ...form, latitude: event.target.value })} /></label>
+            <label>Longitude<input type="number" step="any" value={form.longitude} onChange={(event) => setForm({ ...form, longitude: event.target.value })} /></label>
+          </div>
+          {hospitalProfile?.location_address && <p className="panel-note">Current: {hospitalProfile.location_address}</p>}
+          <p className="panel-note">Maps by OpenStreetMap, routing by OSRM.</p>
+        </form>
+      </section>
       <section className="page-grid">
         <div className="panel">
           <h2>{editingTarget?.type === 'doctor' ? 'Edit Doctor' : 'Create Doctor Login'}</h2>

@@ -83,11 +83,23 @@ async function createSchema() {
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
       branch TEXT NOT NULL DEFAULT '',
+      location_address TEXT NOT NULL DEFAULT '',
+      latitude DOUBLE PRECISION,
+      longitude DOUBLE PRECISION,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
 
+  await query(`
+    ALTER TABLE hospitals ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
     ALTER TABLE hospitals ADD COLUMN IF NOT EXISTS branch TEXT NOT NULL DEFAULT '';
+    ALTER TABLE hospitals ADD COLUMN IF NOT EXISTS location_address TEXT NOT NULL DEFAULT '';
+    ALTER TABLE hospitals ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
+    ALTER TABLE hospitals ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+    ALTER TABLE hospitals ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  `);
 
+  await query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
       role TEXT NOT NULL CHECK (role IN ('admin', 'hospital', 'patient', 'doctor', 'lab')),
@@ -100,9 +112,23 @@ async function createSchema() {
       travel_minutes INTEGER NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
 
+  await query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'patient';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT NOT NULL DEFAULT '';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS password TEXT NOT NULL DEFAULT '';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS hospital_id INTEGER;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS doctor_id INTEGER;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS lab_id INTEGER;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS travel_minutes INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  `);
 
+  await query('CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique_idx ON users(username)');
+
+  await query(`
     CREATE TABLE IF NOT EXISTS doctors (
       id SERIAL PRIMARY KEY,
       hospital_id INTEGER NOT NULL REFERENCES hospitals(id) ON DELETE CASCADE,
@@ -115,11 +141,21 @@ async function createSchema() {
       break_started_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
 
+  await query(`
+    ALTER TABLE doctors ADD COLUMN IF NOT EXISTS hospital_id INTEGER;
+    ALTER TABLE doctors ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
+    ALTER TABLE doctors ADD COLUMN IF NOT EXISTS daily_token_limit INTEGER NOT NULL DEFAULT 50;
     ALTER TABLE doctors ADD COLUMN IF NOT EXISTS consultation_fee INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE doctors ADD COLUMN IF NOT EXISTS avg_consultation_minutes INTEGER NOT NULL DEFAULT 12;
     ALTER TABLE doctors ADD COLUMN IF NOT EXISTS avg_daily_break_minutes INTEGER NOT NULL DEFAULT 120;
+    ALTER TABLE doctors ADD COLUMN IF NOT EXISTS on_break BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE doctors ADD COLUMN IF NOT EXISTS break_started_at TIMESTAMPTZ;
+    ALTER TABLE doctors ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  `);
 
+  await query(`
     CREATE TABLE IF NOT EXISTS labs (
       id SERIAL PRIMARY KEY,
       hospital_id INTEGER NOT NULL REFERENCES hospitals(id) ON DELETE CASCADE,
@@ -128,17 +164,28 @@ async function createSchema() {
       daily_token_limit INTEGER NOT NULL DEFAULT 100,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
 
-    ALTER TABLE users
-      ADD CONSTRAINT users_doctor_fk FOREIGN KEY (doctor_id) REFERENCES doctors(id) ON DELETE CASCADE;
+  await query(`
+    ALTER TABLE labs ADD COLUMN IF NOT EXISTS hospital_id INTEGER;
+    ALTER TABLE labs ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
+    ALTER TABLE labs ADD COLUMN IF NOT EXISTS capacity INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE labs ADD COLUMN IF NOT EXISTS daily_token_limit INTEGER NOT NULL DEFAULT 100;
+    ALTER TABLE labs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  `);
 
-    ALTER TABLE users
-      ADD CONSTRAINT users_lab_fk FOREIGN KEY (lab_id) REFERENCES labs(id) ON DELETE CASCADE;
-  `).catch((error) => {
-    if (!String(error.message).includes('already exists')) {
-      throw error;
-    }
-  });
+  await query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_doctor_fk') THEN
+        ALTER TABLE users ADD CONSTRAINT users_doctor_fk FOREIGN KEY (doctor_id) REFERENCES doctors(id) ON DELETE CASCADE;
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_lab_fk') THEN
+        ALTER TABLE users ADD CONSTRAINT users_lab_fk FOREIGN KEY (lab_id) REFERENCES labs(id) ON DELETE CASCADE;
+      END IF;
+    END $$;
+  `);
 
   await query(`
     CREATE TABLE IF NOT EXISTS tokens (
@@ -159,11 +206,46 @@ async function createSchema() {
       started_at TIMESTAMPTZ,
       finished_at TIMESTAMPTZ
     );
+  `);
 
+  await query(`
+    ALTER TABLE tokens ADD COLUMN IF NOT EXISTS token_number INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE tokens ADD COLUMN IF NOT EXISTS patient_user_id INTEGER;
+    ALTER TABLE tokens ADD COLUMN IF NOT EXISTS patient_name TEXT NOT NULL DEFAULT '';
+    ALTER TABLE tokens ADD COLUMN IF NOT EXISTS hospital_id INTEGER;
+    ALTER TABLE tokens ADD COLUMN IF NOT EXISTS doctor_id INTEGER;
+    ALTER TABLE tokens ADD COLUMN IF NOT EXISTS lab_id INTEGER;
+    ALTER TABLE tokens ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'waiting_doctor';
+    ALTER TABLE tokens ADD COLUMN IF NOT EXISTS prescribed_lab BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE tokens ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 5;
     ALTER TABLE tokens ADD COLUMN IF NOT EXISTS token_date DATE NOT NULL DEFAULT CURRENT_DATE;
-    CREATE INDEX IF NOT EXISTS tokens_doctor_status_idx ON tokens(doctor_id, status, token_date, created_at);
-    CREATE INDEX IF NOT EXISTS tokens_lab_status_idx ON tokens(lab_id, status, priority, token_date, created_at);
+    ALTER TABLE tokens ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    ALTER TABLE tokens ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+    ALTER TABLE tokens ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+  `);
 
+  await query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tokens_patient_user_fk') THEN
+        ALTER TABLE tokens ADD CONSTRAINT tokens_patient_user_fk FOREIGN KEY (patient_user_id) REFERENCES users(id) ON DELETE SET NULL;
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tokens_hospital_fk') THEN
+        ALTER TABLE tokens ADD CONSTRAINT tokens_hospital_fk FOREIGN KEY (hospital_id) REFERENCES hospitals(id) ON DELETE CASCADE;
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tokens_doctor_fk') THEN
+        ALTER TABLE tokens ADD CONSTRAINT tokens_doctor_fk FOREIGN KEY (doctor_id) REFERENCES doctors(id) ON DELETE SET NULL;
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tokens_lab_fk') THEN
+        ALTER TABLE tokens ADD CONSTRAINT tokens_lab_fk FOREIGN KEY (lab_id) REFERENCES labs(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
+  `);
+
+  await query(`
     CREATE TABLE IF NOT EXISTS activity_logs (
       id SERIAL PRIMARY KEY,
       actor_role TEXT NOT NULL,
@@ -173,6 +255,29 @@ async function createSchema() {
       duration_minutes INTEGER,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
+
+  await query(`
+    ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS actor_role TEXT NOT NULL DEFAULT '';
+    ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS actor_id INTEGER;
+    ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS token_id INTEGER;
+    ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT '';
+    ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS duration_minutes INTEGER;
+    ALTER TABLE activity_logs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  `);
+
+  await query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'activity_logs_token_fk') THEN
+        ALTER TABLE activity_logs ADD CONSTRAINT activity_logs_token_fk FOREIGN KEY (token_id) REFERENCES tokens(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS tokens_doctor_status_idx ON tokens(doctor_id, status, token_date, created_at);
+    CREATE INDEX IF NOT EXISTS tokens_lab_status_idx ON tokens(lab_id, status, priority, token_date, created_at);
   `);
 
   const adminUsername = process.env.ADMIN_USERNAME || 'admin';
@@ -330,9 +435,15 @@ app.post('/api/register/hospital', async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const latitude = req.body.latitude === '' || req.body.latitude == null ? null : Number(req.body.latitude);
+    const longitude = req.body.longitude === '' || req.body.longitude == null ? null : Number(req.body.longitude);
+    if ((latitude != null && Number.isNaN(latitude)) || (longitude != null && Number.isNaN(longitude))) {
+      throw new Error('Invalid hospital coordinates.');
+    }
     const hospital = await client.query(
-      'INSERT INTO hospitals (name, branch) VALUES ($1, $2) RETURNING *',
-      [req.body.name, req.body.branch || '']
+      `INSERT INTO hospitals (name, branch, location_address, latitude, longitude)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [req.body.name, req.body.branch || '', req.body.locationAddress || '', latitude, longitude]
     );
     const user = await client.query(
       `INSERT INTO users (role, name, username, password, hospital_id)
@@ -404,6 +515,9 @@ app.get('/api/tokens', async (req, res) => {
           d.name AS doctor_name,
           l.name AS lab_name,
           h.name AS hospital_name,
+          h.location_address AS hospital_location_address,
+          h.latitude AS hospital_latitude,
+          h.longitude AS hospital_longitude,
           u.travel_minutes AS patient_travel_minutes,
           COALESCE(avg_times.avg_service_minutes, d.avg_consultation_minutes)::int AS avg_service_minutes,
           COALESCE(break_times.avg_break_minutes, d.avg_daily_break_minutes)::int AS avg_break_minutes,
@@ -445,6 +559,30 @@ app.get('/api/tokens', async (req, res) => {
     res.json({ tokens: tokens.rows });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch('/api/hospitals/:hospitalId/location', async (req, res) => {
+  try {
+    const latitude = req.body.latitude === '' || req.body.latitude == null ? null : Number(req.body.latitude);
+    const longitude = req.body.longitude === '' || req.body.longitude == null ? null : Number(req.body.longitude);
+    if ((latitude != null && Number.isNaN(latitude)) || (longitude != null && Number.isNaN(longitude))) {
+      throw new Error('Invalid hospital coordinates.');
+    }
+
+    const result = await query(
+      `UPDATE hospitals
+          SET location_address = $1,
+              latitude = $2,
+              longitude = $3
+        WHERE id = $4
+        RETURNING *`,
+      [req.body.locationAddress || '', latitude, longitude, req.params.hospitalId]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Hospital not found.' });
+    res.json({ hospital: result.rows[0] });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
   }
 });
 

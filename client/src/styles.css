@@ -294,6 +294,26 @@ button:disabled {
   font-size: 0.95rem;
 }
 
+.location-box {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(0, 255, 150, 0.22);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.location-box div {
+  display: grid;
+  gap: 4px;
+}
+
+.coordinate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .time-status {
   margin-top: 16px;
   padding: 14px 16px;
@@ -656,6 +676,7 @@ th {
   }
 
   .dashboard,
+  .coordinate-grid,
   .metric-row {
     grid-template-columns: 1fr;
   }
