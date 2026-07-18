@@ -26,7 +26,18 @@ body {
   background: radial-gradient(circle at top left, rgba(12, 255, 156, 0.15), transparent 20%),
               radial-gradient(circle at bottom right, rgba(0, 255, 150, 0.08), transparent 18%),
               linear-gradient(180deg, #030503 0%, #070d09 45%, #041108 100%);
+  background-attachment: fixed;
   color: var(--text-muted);
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at 15% 15%, rgba(0, 255, 150, 0.12), transparent 14%),
+              radial-gradient(circle at 85% 20%, rgba(12, 240, 255, 0.08), transparent 16%);
+  pointer-events: none;
+  z-index: 0;
 }
 
 button,
