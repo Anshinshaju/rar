@@ -399,10 +399,47 @@ app.get('/api/tokens', async (req, res) => {
     const fromString = fromDate.toISOString().split('T')[0];
     const toString = toDate.toISOString().split('T')[0];
     const tokens = await query(
-      `SELECT * FROM tokens
-        WHERE patient_user_id = $1
-          AND token_date BETWEEN $2 AND $3
-        ORDER BY token_date DESC, created_at DESC`,
+      `SELECT
+          t.*,
+          d.name AS doctor_name,
+          l.name AS lab_name,
+          h.name AS hospital_name,
+          u.travel_minutes AS patient_travel_minutes,
+          COALESCE(avg_times.avg_service_minutes, d.avg_consultation_minutes)::int AS avg_service_minutes,
+          COALESCE(break_times.avg_break_minutes, d.avg_daily_break_minutes)::int AS avg_break_minutes,
+          (COALESCE(waiting.count, 0) * COALESCE(avg_times.avg_service_minutes, d.avg_consultation_minutes))::int AS avg_wait_minutes,
+          (COALESCE(waiting.count, 0) * COALESCE(avg_times.avg_service_minutes, d.avg_consultation_minutes) + COALESCE(break_times.avg_break_minutes, d.avg_daily_break_minutes))::int AS avg_wait_with_break_minutes
+        FROM tokens t
+        LEFT JOIN doctors d ON d.id = t.doctor_id
+        LEFT JOIN labs l ON l.id = t.lab_id
+        LEFT JOIN hospitals h ON h.id = t.hospital_id
+        LEFT JOIN users u ON u.id = t.patient_user_id
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*) AS count
+          FROM tokens wt
+          WHERE wt.doctor_id = t.doctor_id
+            AND wt.status = 'waiting_doctor'
+            AND wt.created_at <= t.created_at
+        ) waiting ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(ROUND(AVG(duration_minutes))::int, d.avg_consultation_minutes) AS avg_service_minutes
+          FROM activity_logs
+          WHERE actor_role = 'doctor'
+            AND actor_id = d.id
+            AND action = 'finish_patient'
+            AND created_at >= NOW() - INTERVAL '30 days'
+        ) avg_times ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(ROUND(AVG(duration_minutes))::int, d.avg_daily_break_minutes) AS avg_break_minutes
+          FROM activity_logs
+          WHERE actor_role = 'doctor'
+            AND actor_id = d.id
+            AND action = 'break_end'
+            AND created_at >= NOW() - INTERVAL '30 days'
+        ) break_times ON TRUE
+        WHERE t.patient_user_id = $1
+          AND t.token_date BETWEEN $2 AND $3
+        ORDER BY t.token_date DESC, t.created_at DESC`,
       [userId, fromString, toString]
     );
     res.json({ tokens: tokens.rows });

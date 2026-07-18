@@ -595,7 +595,6 @@ function RegisterPage({ form, setForm, submitRegister }) {
 function PatientPage({ currentUser, deleteToken, patientTokens, status }) {
   const activeTokens = patientTokens.filter((token) => ['waiting_doctor', 'in_doctor', 'waiting_lab', 'in_lab'].includes(token.status));
   const finishedTokens = patientTokens.filter((token) => token.status === 'finished');
-  const travelMinutes = Number(currentUser?.travel_minutes) || 0;
   return (
     <section className="page-grid">
       <div className="panel emphasis">
@@ -603,9 +602,13 @@ function PatientPage({ currentUser, deleteToken, patientTokens, status }) {
         {activeTokens.length ? (
           <ol className="patient-token-list">
             {activeTokens.map((token) => {
-              const doctor = token.doctor_id ? status.doctors.find((item) => item.id === token.doctor_id) : null;
-              const waitMinutes = doctor?.avg_wait_with_break_minutes ?? doctor?.avg_wait_minutes ?? 0;
-              const leaveStatus = doctor && token.status === 'waiting_doctor'
+              const doctor = token.doctor_id ? status.doctors.find((item) => String(item.id) === String(token.doctor_id)) : null;
+              const doctorName = doctor?.name || token.doctor_name;
+              const labName = token.lab_name;
+              const visitType = token.status.includes('doctor') ? 'Doctor' : 'Lab';
+              const waitMinutes = doctor?.avg_wait_with_break_minutes ?? token.avg_wait_with_break_minutes ?? doctor?.avg_wait_minutes ?? token.avg_wait_minutes ?? 0;
+              const travelMinutes = Number(currentUser?.travel_minutes ?? token.patient_travel_minutes) || 0;
+              const leaveStatus = token.doctor_id && token.status === 'waiting_doctor'
                 ? getLeaveStatus(waitMinutes, travelMinutes)
                 : null;
 
@@ -616,13 +619,20 @@ function PatientPage({ currentUser, deleteToken, patientTokens, status }) {
                     <span>{token.status.replace(/_/g, ' ')}</span>
                   </div>
                   <div>
-                    <small>{token.lab_id ? 'Lab' : 'Doctor'}</small>
+                    <small>{visitType}</small>
                     <small>Date {new Date(token.token_date).toLocaleDateString()}</small>
                   </div>
-                  {doctor && (
+                  {doctorName && token.status.includes('doctor') && (
                     <div>
-                      <span>{doctor.name}</span>
+                      <span>{doctorName}</span>
                       <span>Wait {humanTime(waitMinutes)}</span>
+                    </div>
+                  )}
+                  {labName && token.status.includes('lab') && <div><span>{labName}</span></div>}
+                  {leaveStatus && (
+                    <div>
+                      <span>Travel {humanTime(travelMinutes)}</span>
+                      <span>Leave {leaveStatus.headline}</span>
                     </div>
                   )}
                   {leaveStatus && <TimeStatus status={leaveStatus} />}
