@@ -17,6 +17,8 @@ const emptyForm = {
   capacity: 2,
   dailyTokenLimit: 50,
   consultationFee: 0,
+  avgConsultationMinutes: 12,
+  avgDailyBreakMinutes: 120,
   branch: ''
 };
 
@@ -250,7 +252,9 @@ function App() {
           body: JSON.stringify({
             name: form.name,
             dailyTokenLimit: form.dailyTokenLimit,
-            consultationFee: form.consultationFee
+            consultationFee: form.consultationFee,
+            avgConsultationMinutes: form.avgConsultationMinutes,
+            avgDailyBreakMinutes: form.avgDailyBreakMinutes
           })
         });
         setMessage(`Doctor updated: ${form.name}.`);
@@ -262,13 +266,15 @@ function App() {
             username: form.username,
             password: form.password,
             dailyTokenLimit: form.dailyTokenLimit,
-            consultationFee: form.consultationFee
+            consultationFee: form.consultationFee,
+            avgConsultationMinutes: form.avgConsultationMinutes,
+            avgDailyBreakMinutes: form.avgDailyBreakMinutes
           })
         });
         setMessage(`Doctor login created for ${form.name}.`);
       }
       setEditingTarget(null);
-      setForm((prev) => ({ ...prev, name: '', username: '', password: '', dailyTokenLimit: 50, consultationFee: 0 }));
+      setForm((prev) => ({ ...prev, name: '', username: '', password: '', dailyTokenLimit: 50, consultationFee: 0, avgConsultationMinutes: 12, avgDailyBreakMinutes: 120 }));
       refresh();
     } catch (error) {
       setMessage(error.message);
@@ -337,7 +343,9 @@ function App() {
       username: '',
       password: '',
       dailyTokenLimit: doctor.daily_token_limit,
-      consultationFee: doctor.consultation_fee ?? 0
+      consultationFee: doctor.consultation_fee ?? 0,
+      avgConsultationMinutes: doctor.avg_consultation_minutes ?? 12,
+      avgDailyBreakMinutes: doctor.avg_daily_break_minutes ?? 120
     }));
   }
 
@@ -638,8 +646,11 @@ function NewTokenPage({ form, setForm, submitToken, hospitals, selectedHospital,
               </label>
               {selectedDoctor && (
                 <div className="doctor-summary neon-box">
-                  <div><strong>Average service</strong> {selectedDoctor.avg_service_minutes} min</div>
-                  <div><strong>Avg wait</strong> {selectedDoctor.avg_wait_minutes} min</div>
+                  <div><strong>Average consultation</strong> {selectedDoctor.avg_service_minutes} min</div>
+                  <div><strong>Average physician break</strong> {selectedDoctor.avg_break_minutes} min</div>
+                  <div><strong>Queue length</strong> {selectedDoctor.queue_length}</div>
+                  <div><strong>Estimated wait</strong> {selectedDoctor.avg_wait_minutes} min</div>
+                  <div><strong>Wait with breaks</strong> {selectedDoctor.avg_wait_with_break_minutes} min</div>
                   <div><strong>Tokens left</strong> {selectedDoctor.tokens_remaining}</div>
                   <div><strong>Fee</strong> ₹{selectedDoctor.consultation_fee ?? 0}</div>
                 </div>
@@ -692,6 +703,8 @@ function HospitalPage({ createDoctor, createLab, form, hospitalDoctors, hospital
             <label>Doctor password<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
             <label>Daily token limit<input type="number" min="1" value={form.dailyTokenLimit} onChange={(event) => setForm({ ...form, dailyTokenLimit: event.target.value })} /></label>
             <label>Consultation fee<input type="number" min="0" value={form.consultationFee} onChange={(event) => setForm({ ...form, consultationFee: event.target.value })} /></label>
+            <label>Avg consultation time<input type="number" min="1" value={form.avgConsultationMinutes} onChange={(event) => setForm({ ...form, avgConsultationMinutes: event.target.value })} /> minutes</label>
+            <label>Avg daily break<input type="number" min="0" value={form.avgDailyBreakMinutes} onChange={(event) => setForm({ ...form, avgDailyBreakMinutes: event.target.value })} /> minutes</label>
             <div className="button-row">
               <button type="submit">{editingTarget?.type === 'doctor' ? 'Update Doctor' : 'Create Doctor Login'}</button>
               {editingTarget?.type === 'doctor' && <button type="button" onClick={cancelEdit}>Cancel</button>}

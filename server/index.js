@@ -107,12 +107,16 @@ async function createSchema() {
       name TEXT NOT NULL,
       daily_token_limit INTEGER NOT NULL DEFAULT 50,
       consultation_fee INTEGER NOT NULL DEFAULT 0,
+      avg_consultation_minutes INTEGER NOT NULL DEFAULT 12,
+      avg_daily_break_minutes INTEGER NOT NULL DEFAULT 120,
       on_break BOOLEAN NOT NULL DEFAULT FALSE,
       break_started_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     ALTER TABLE doctors ADD COLUMN IF NOT EXISTS consultation_fee INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE doctors ADD COLUMN IF NOT EXISTS avg_consultation_minutes INTEGER NOT NULL DEFAULT 12;
+    ALTER TABLE doctors ADD COLUMN IF NOT EXISTS avg_daily_break_minutes INTEGER NOT NULL DEFAULT 120;
 
     CREATE TABLE IF NOT EXISTS labs (
       id SERIAL PRIMARY KEY,
@@ -187,7 +191,9 @@ async function getHospitals() {
         'id', d.id,
         'name', d.name,
         'dailyTokenLimit', d.daily_token_limit,
-        'consultationFee', d.consultation_fee
+        'consultationFee', d.consultation_fee,
+        'avgConsultationMinutes', d.avg_consultation_minutes,
+        'avgDailyBreakMinutes', d.avg_daily_break_minutes
       )) FILTER (WHERE d.id IS NOT NULL), '[]') AS doctors,
       COALESCE(json_agg(DISTINCT jsonb_build_object(
         'id', l.id,
@@ -212,10 +218,12 @@ async function getStatus() {
       COALESCE(waiting.queue, '[]') AS queue,
       COALESCE(waiting.count, 0)::int AS queue_length,
       COALESCE(finished.count, 0)::int AS finished_today,
-      COALESCE(avg_times.avg_service_minutes, 10)::int AS avg_service_minutes,
+      COALESCE(avg_times.avg_service_minutes, d.avg_consultation_minutes)::int AS avg_service_minutes,
+      COALESCE(break_times.avg_break_minutes, d.avg_daily_break_minutes)::int AS avg_break_minutes,
       COALESCE(daily_tokens.count, 0)::int AS todays_tokens,
       GREATEST(0, d.daily_token_limit - COALESCE(daily_tokens.count, 0))::int AS tokens_remaining,
-      (COALESCE(waiting.count, 0) * COALESCE(avg_times.avg_service_minutes, 10))::int AS avg_wait_minutes
+      (COALESCE(waiting.count, 0) * COALESCE(avg_times.avg_service_minutes, d.avg_consultation_minutes))::int AS avg_wait_minutes,
+      (COALESCE(waiting.count, 0) * COALESCE(avg_times.avg_service_minutes, d.avg_consultation_minutes) + COALESCE(break_times.avg_break_minutes, d.avg_daily_break_minutes))::int AS avg_wait_with_break_minutes
     FROM doctors d
     JOIN hospitals h ON h.id = d.hospital_id
     LEFT JOIN LATERAL (
@@ -235,10 +243,21 @@ async function getStatus() {
       WHERE t.doctor_id = d.id AND t.status = 'finished' AND t.finished_at::date = CURRENT_DATE
     ) finished ON TRUE
     LEFT JOIN LATERAL (
-      SELECT COALESCE(ROUND(AVG(duration_minutes))::int, 10) AS avg_service_minutes
+      SELECT COALESCE(ROUND(AVG(duration_minutes))::int, d.avg_consultation_minutes) AS avg_service_minutes
       FROM activity_logs
-      WHERE actor_role = 'doctor' AND actor_id = d.id AND action = 'finish_patient'
+      WHERE actor_role = 'doctor'
+        AND actor_id = d.id
+        AND action = 'finish_patient'
+        AND created_at >= NOW() - INTERVAL '30 days'
     ) avg_times ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(ROUND(AVG(duration_minutes))::int, d.avg_daily_break_minutes) AS avg_break_minutes
+      FROM activity_logs
+      WHERE actor_role = 'doctor'
+        AND actor_id = d.id
+        AND action = 'break_end'
+        AND created_at >= NOW() - INTERVAL '30 days'
+    ) break_times ON TRUE
     LEFT JOIN LATERAL (
       SELECT COUNT(*) AS count
       FROM tokens t
@@ -398,9 +417,9 @@ app.post('/api/hospitals/:hospitalId/doctors', async (req, res) => {
   try {
     await client.query('BEGIN');
     const doctor = await client.query(
-      `INSERT INTO doctors (hospital_id, name, daily_token_limit, consultation_fee)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [req.params.hospitalId, req.body.name, Number(req.body.dailyTokenLimit) || 50, Number(req.body.consultationFee) || 0]
+      `INSERT INTO doctors (hospital_id, name, daily_token_limit, consultation_fee, avg_consultation_minutes, avg_daily_break_minutes)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [req.params.hospitalId, req.body.name, Number(req.body.dailyTokenLimit) || 50, Number(req.body.consultationFee) || 0, Number(req.body.avgConsultationMinutes) || 12, Number(req.body.avgDailyBreakMinutes) || 120]
     );
     const user = await client.query(
       `INSERT INTO users (role, name, username, password, hospital_id, doctor_id)
@@ -453,8 +472,8 @@ app.patch('/api/hospitals/:hospitalId/doctors/:doctorId', async (req, res) => {
   const client = await pool.connect();
   try {
     const doctor = await client.query(
-      `UPDATE doctors SET name = $1, daily_token_limit = $2, consultation_fee = $3 WHERE id = $4 AND hospital_id = $5 RETURNING *`,
-      [req.body.name, Number(req.body.dailyTokenLimit) || 50, Number(req.body.consultationFee) || 0, req.params.doctorId, req.params.hospitalId]
+      `UPDATE doctors SET name = $1, daily_token_limit = $2, consultation_fee = $3, avg_consultation_minutes = $4, avg_daily_break_minutes = $5 WHERE id = $6 AND hospital_id = $7 RETURNING *`,
+      [req.body.name, Number(req.body.dailyTokenLimit) || 50, Number(req.body.consultationFee) || 0, Number(req.body.avgConsultationMinutes) || 12, Number(req.body.avgDailyBreakMinutes) || 120, req.params.doctorId, req.params.hospitalId]
     );
     if (!doctor.rows[0]) throw new Error('Doctor not found.');
     await client.query(
