@@ -58,6 +58,7 @@ function App() {
   const [message, setMessage] = useState('');
   const [eta, setEta] = useState(null);
   const [patientTokens, setPatientTokens] = useState([]);
+  const [editingTarget, setEditingTarget] = useState(null);
 
   useEffect(() => {
     const onHashChange = () => setRoute(getRoute());
@@ -235,16 +236,28 @@ function App() {
   async function createDoctor(event) {
     event.preventDefault();
     try {
-      await api(`/hospitals/${currentUser.hospital_id}/doctors`, {
-        method: 'POST',
-        body: JSON.stringify({
-          name: form.name,
-          username: form.username,
-          password: form.password,
-          dailyTokenLimit: form.dailyTokenLimit
-        })
-      });
-      setMessage(`Doctor login created for ${form.name}.`);
+      if (editingTarget?.type === 'doctor') {
+        await api(`/hospitals/${currentUser.hospital_id}/doctors/${editingTarget.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            name: form.name,
+            dailyTokenLimit: form.dailyTokenLimit
+          })
+        });
+        setMessage(`Doctor updated: ${form.name}.`);
+      } else {
+        await api(`/hospitals/${currentUser.hospital_id}/doctors`, {
+          method: 'POST',
+          body: JSON.stringify({
+            name: form.name,
+            username: form.username,
+            password: form.password,
+            dailyTokenLimit: form.dailyTokenLimit
+          })
+        });
+        setMessage(`Doctor login created for ${form.name}.`);
+      }
+      setEditingTarget(null);
       setForm((prev) => ({ ...prev, name: '', username: '', password: '', dailyTokenLimit: 50 }));
       refresh();
     } catch (error) {
@@ -255,18 +268,93 @@ function App() {
   async function createLab(event) {
     event.preventDefault();
     try {
-      await api(`/hospitals/${currentUser.hospital_id}/labs`, {
-        method: 'POST',
-        body: JSON.stringify({
-          name: form.name,
-          username: form.username,
-          password: form.password,
-          capacity: form.capacity,
-          dailyTokenLimit: form.dailyTokenLimit
-        })
-      });
-      setMessage(`Lab login created for ${form.name}.`);
+      if (editingTarget?.type === 'lab') {
+        await api(`/hospitals/${currentUser.hospital_id}/labs/${editingTarget.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            name: form.name,
+            capacity: form.capacity,
+            dailyTokenLimit: form.dailyTokenLimit
+          })
+        });
+        setMessage(`Lab updated: ${form.name}.`);
+      } else {
+        await api(`/hospitals/${currentUser.hospital_id}/labs`, {
+          method: 'POST',
+          body: JSON.stringify({
+            name: form.name,
+            username: form.username,
+            password: form.password,
+            capacity: form.capacity,
+            dailyTokenLimit: form.dailyTokenLimit
+          })
+        });
+        setMessage(`Lab login created for ${form.name}.`);
+      }
+      setEditingTarget(null);
       setForm((prev) => ({ ...prev, name: '', username: '', password: '', capacity: 2, dailyTokenLimit: 100 }));
+      refresh();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function deleteDoctor(doctorId) {
+    try {
+      await api(`/hospitals/${currentUser.hospital_id}/doctors/${doctorId}`, { method: 'DELETE' });
+      setMessage('Doctor deleted.');
+      refresh();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function deleteLab(labId) {
+    try {
+      await api(`/hospitals/${currentUser.hospital_id}/labs/${labId}`, { method: 'DELETE' });
+      setMessage('Lab deleted.');
+      refresh();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  function editDoctor(doctor) {
+    setEditingTarget({ type: 'doctor', id: doctor.id });
+    setForm((prev) => ({
+      ...prev,
+      name: doctor.name,
+      username: '',
+      password: '',
+      dailyTokenLimit: doctor.daily_token_limit
+    }));
+  }
+
+  function editLab(lab) {
+    setEditingTarget({ type: 'lab', id: lab.id });
+    setForm((prev) => ({
+      ...prev,
+      name: lab.name,
+      username: '',
+      password: '',
+      capacity: lab.capacity,
+      dailyTokenLimit: lab.daily_token_limit
+    }));
+  }
+
+  function cancelEdit() {
+    setEditingTarget(null);
+    setForm((prev) => ({ ...prev, name: '', username: '', password: '', capacity: 2, dailyTokenLimit: 50 }));
+  }
+
+  async function deleteToken(tokenId) {
+    try {
+      await api(`/tokens/${tokenId}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ userId: currentUser.id })
+      });
+      setMessage('Token cancelled.');
+      await fetchPatientTokens(currentUser.id);
       refresh();
     } catch (error) {
       setMessage(error.message);
@@ -321,7 +409,14 @@ function App() {
     submitRegister,
     submitToken,
     createDoctor,
-    createLab
+    createLab,
+    deleteDoctor,
+    deleteLab,
+    editDoctor,
+    editLab,
+    cancelEdit,
+    editingTarget,
+    deleteToken
   };
 
   return (
@@ -501,6 +596,7 @@ function PatientPage({ eta, form, hospitals, selectedHospital, setForm, submitTo
                 <span>{token.lab_id ? 'Lab' : 'Doctor'}</span>
                 <span>Date {new Date(token.token_date).toLocaleDateString()}</span>
                 <span>Priority {token.priority}</span>
+                <button type="button" className="small-button" onClick={() => deleteToken(token.id)}>Cancel</button>
               </li>
             ))}
           </ol>
@@ -528,29 +624,35 @@ function PatientPage({ eta, form, hospitals, selectedHospital, setForm, submitTo
   );
 }
 
-function HospitalPage({ createDoctor, createLab, form, hospitalDoctors, hospitalLabs, setForm }) {
+function HospitalPage({ createDoctor, createLab, form, hospitalDoctors, hospitalLabs, setForm, deleteDoctor, deleteLab, editDoctor, editLab, cancelEdit, editingTarget }) {
   return (
     <>
       <section className="page-grid">
         <div className="panel">
-          <h2>Create Doctor Login</h2>
+          <h2>{editingTarget?.type === 'doctor' ? 'Edit Doctor' : 'Create Doctor Login'}</h2>
           <form onSubmit={createDoctor}>
             <label>Doctor name<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
             <label>Doctor username<input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></label>
             <label>Doctor password<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
             <label>Daily token limit<input type="number" min="1" value={form.dailyTokenLimit} onChange={(event) => setForm({ ...form, dailyTokenLimit: event.target.value })} /></label>
-            <button type="submit">Create Doctor Login</button>
+            <div className="button-row">
+              <button type="submit">{editingTarget?.type === 'doctor' ? 'Update Doctor' : 'Create Doctor Login'}</button>
+              {editingTarget?.type === 'doctor' && <button type="button" onClick={cancelEdit}>Cancel</button>}
+            </div>
           </form>
         </div>
         <div className="panel">
-          <h2>Create Lab Login</h2>
+          <h2>{editingTarget?.type === 'lab' ? 'Edit Lab' : 'Create Lab Login'}</h2>
           <form onSubmit={createLab}>
             <label>Lab name<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
             <label>Lab username<input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></label>
             <label>Lab password<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
             <label>Patients at a time<input type="number" min="1" value={form.capacity} onChange={(event) => setForm({ ...form, capacity: event.target.value })} /></label>
             <label>Daily token limit<input type="number" min="1" value={form.dailyTokenLimit} onChange={(event) => setForm({ ...form, dailyTokenLimit: event.target.value })} /></label>
-            <button type="submit">Create Lab Login</button>
+            <div className="button-row">
+              <button type="submit">{editingTarget?.type === 'lab' ? 'Update Lab' : 'Create Lab Login'}</button>
+              {editingTarget?.type === 'lab' && <button type="button" onClick={cancelEdit}>Cancel</button>}
+            </div>
           </form>
         </div>
       </section>
@@ -560,6 +662,57 @@ function HospitalPage({ createDoctor, createLab, form, hospitalDoctors, hospital
           {[...hospitalDoctors, ...hospitalLabs].map((unit) => (
             <QueueCard key={`${unit.capacity ? 'lab' : 'doctor'}-${unit.id}`} unit={unit} />
           ))}
+        </div>
+      </section>
+      <section className="page-grid">
+        <div className="panel">
+          <h2>Doctors</h2>
+          {hospitalDoctors.length ? (
+            <table className="admin-table">
+              <thead>
+                <tr><th>Name</th><th>Limit</th><th>Actions</th></tr>
+              </thead>
+              <tbody>
+                {hospitalDoctors.map((doctor) => (
+                  <tr key={doctor.id}>
+                    <td>{doctor.name}</td>
+                    <td>{doctor.daily_token_limit}</td>
+                    <td>
+                      <button type="button" onClick={() => editDoctor(doctor)}>Edit</button>
+                      <button type="button" onClick={() => deleteDoctor(doctor.id)}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p>No doctors found.</p>
+          )}
+        </div>
+        <div className="panel">
+          <h2>Labs</h2>
+          {hospitalLabs.length ? (
+            <table className="admin-table">
+              <thead>
+                <tr><th>Name</th><th>Capacity</th><th>Limit</th><th>Actions</th></tr>
+              </thead>
+              <tbody>
+                {hospitalLabs.map((lab) => (
+                  <tr key={lab.id}>
+                    <td>{lab.name}</td>
+                    <td>{lab.capacity}</td>
+                    <td>{lab.daily_token_limit}</td>
+                    <td>
+                      <button type="button" onClick={() => editLab(lab)}>Edit</button>
+                      <button type="button" onClick={() => deleteLab(lab.id)}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p>No labs found.</p>
+          )}
         </div>
       </section>
     </>

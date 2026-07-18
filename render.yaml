@@ -11,5 +11,5 @@ services:
     name: rar-frontend
     branch: main
     buildCommand: npm install && npm run build
-    publishPath: client/dist
+    publishPath: dist
     instanceType: starter

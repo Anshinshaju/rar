@@ -425,6 +425,105 @@ app.post('/api/hospitals/:hospitalId/labs', async (req, res) => {
   }
 });
 
+app.patch('/api/hospitals/:hospitalId/doctors/:doctorId', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const doctor = await client.query(
+      `UPDATE doctors SET name = $1, daily_token_limit = $2 WHERE id = $3 AND hospital_id = $4 RETURNING *`,
+      [req.body.name, Number(req.body.dailyTokenLimit) || 50, req.params.doctorId, req.params.hospitalId]
+    );
+    if (!doctor.rows[0]) throw new Error('Doctor not found.');
+    await client.query(
+      `UPDATE users SET name = $1 WHERE doctor_id = $2`,
+      [req.body.name, req.params.doctorId]
+    );
+    res.json({ doctor: doctor.rows[0] });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/api/hospitals/:hospitalId/doctors/:doctorId', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const doctor = await client.query(
+      `DELETE FROM doctors WHERE id = $1 AND hospital_id = $2 RETURNING *`,
+      [req.params.doctorId, req.params.hospitalId]
+    );
+    if (!doctor.rows[0]) throw new Error('Doctor not found.');
+    await client.query(`DELETE FROM users WHERE doctor_id = $1`, [req.params.doctorId]);
+    await client.query('COMMIT');
+    res.json({ message: 'Doctor deleted.' });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.patch('/api/hospitals/:hospitalId/labs/:labId', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const lab = await client.query(
+      `UPDATE labs SET name = $1, capacity = $2, daily_token_limit = $3 WHERE id = $4 AND hospital_id = $5 RETURNING *`,
+      [req.body.name, Math.max(1, Number(req.body.capacity) || 1), Number(req.body.dailyTokenLimit) || 100, req.params.labId, req.params.hospitalId]
+    );
+    if (!lab.rows[0]) throw new Error('Lab not found.');
+    await client.query(
+      `UPDATE users SET name = $1 WHERE lab_id = $2`,
+      [req.body.name, req.params.labId]
+    );
+    res.json({ lab: lab.rows[0] });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/api/hospitals/:hospitalId/labs/:labId', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const lab = await client.query(
+      `DELETE FROM labs WHERE id = $1 AND hospital_id = $2 RETURNING *`,
+      [req.params.labId, req.params.hospitalId]
+    );
+    if (!lab.rows[0]) throw new Error('Lab not found.');
+    await client.query(`DELETE FROM users WHERE lab_id = $1`, [req.params.labId]);
+    await client.query('COMMIT');
+    res.json({ message: 'Lab deleted.' });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/api/tokens/:tokenId', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const token = await client.query(
+      `DELETE FROM tokens WHERE id = $1 AND patient_user_id = $2 AND status IN ('waiting_doctor', 'waiting_lab') RETURNING *`,
+      [req.params.tokenId, req.body.userId]
+    );
+    if (!token.rows[0]) throw new Error('Active token not found or cannot be deleted.');
+    await client.query('COMMIT');
+    res.json({ message: 'Token deleted.' });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: error.message });
+  } finally {
+    client.release();
+  }
+});
+
 app.post('/api/tokens', async (req, res) => {
   const client = await pool.connect();
   try {
