@@ -15,7 +15,9 @@ const emptyForm = {
   prescribedLab: false,
   tokenDate: new Date().toISOString().split('T')[0],
   capacity: 2,
-  dailyTokenLimit: 50
+  dailyTokenLimit: 50,
+  consultationFee: 0,
+  branch: ''
 };
 
 const roleHome = {
@@ -152,6 +154,11 @@ function App() {
     () => status.doctors.filter((doctor) => doctor.hospital_id === currentUser?.hospital_id),
     [status.doctors, currentUser]
   );
+  
+  const selectedDoctor = useMemo(
+    () => status.doctors.find((doctor) => String(doctor.id) === String(form.doctorId)),
+    [status.doctors, form.doctorId]
+  );
 
   const hospitalLabs = useMemo(
     () => status.labs.filter((lab) => lab.hospital_id === currentUser?.hospital_id),
@@ -184,7 +191,8 @@ function App() {
           name: form.name,
           username: form.username,
           password: form.password,
-          travelMinutes: form.travelMinutes
+          travelMinutes: form.travelMinutes,
+          branch: form.branch
         })
       });
       setMessage(`${titleRole(form.role)} registered. Please log in.`);
@@ -241,7 +249,8 @@ function App() {
           method: 'PATCH',
           body: JSON.stringify({
             name: form.name,
-            dailyTokenLimit: form.dailyTokenLimit
+            dailyTokenLimit: form.dailyTokenLimit,
+            consultationFee: form.consultationFee
           })
         });
         setMessage(`Doctor updated: ${form.name}.`);
@@ -252,13 +261,14 @@ function App() {
             name: form.name,
             username: form.username,
             password: form.password,
-            dailyTokenLimit: form.dailyTokenLimit
+            dailyTokenLimit: form.dailyTokenLimit,
+            consultationFee: form.consultationFee
           })
         });
         setMessage(`Doctor login created for ${form.name}.`);
       }
       setEditingTarget(null);
-      setForm((prev) => ({ ...prev, name: '', username: '', password: '', dailyTokenLimit: 50 }));
+      setForm((prev) => ({ ...prev, name: '', username: '', password: '', dailyTokenLimit: 50, consultationFee: 0 }));
       refresh();
     } catch (error) {
       setMessage(error.message);
@@ -326,7 +336,8 @@ function App() {
       name: doctor.name,
       username: '',
       password: '',
-      dailyTokenLimit: doctor.daily_token_limit
+      dailyTokenLimit: doctor.daily_token_limit,
+      consultationFee: doctor.consultation_fee ?? 0
     }));
   }
 
@@ -430,6 +441,7 @@ function App() {
             <>
               <a className={route === 'queues' ? 'active' : ''} href="#/queues">Status</a>
               <a className={route === roleHome[currentUser.role] ? 'active' : ''} href={`#/${roleHome[currentUser.role]}`}>{titleRole(currentUser.role)}</a>
+              {currentUser?.role === 'patient' && <a className={route === 'new-token' ? 'active' : ''} href="#/new-token">New Token</a>}
               <button type="button" onClick={logout}>Logout</button>
             </>
           ) : (
@@ -465,6 +477,7 @@ function Page(props) {
 
   if (props.route === 'register') return <RegisterPage {...props} />;
   if (props.route === 'queues') return <QueuesPage {...props} />;
+  if (props.route === 'new-token') return props.currentUser?.role === 'patient' ? <NewTokenPage {...props} /> : <WrongRolePage />;
   if (props.route === 'patient') return props.currentUser?.role === 'patient' ? <PatientPage {...props} /> : <WrongRolePage />;
   if (props.route === 'hospital') return props.currentUser?.role === 'hospital' ? <HospitalPage {...props} /> : <WrongRolePage />;
   if (props.route === 'doctor') return props.currentUser?.role === 'doctor' ? <DoctorPage {...props} /> : <WrongRolePage />;
@@ -507,6 +520,9 @@ function RegisterPage({ form, setForm, submitRegister }) {
           {form.role === 'patient' && (
             <label>Travel minutes<input type="number" min="0" value={form.travelMinutes} onChange={(event) => setForm({ ...form, travelMinutes: event.target.value })} /></label>
           )}
+          {form.role === 'hospital' && (
+            <label>Hospital branch<input value={form.branch} onChange={(event) => setForm({ ...form, branch: event.target.value })} /></label>
+          )}
           <button type="submit">Register {titleRole(form.role)}</button>
         </form>
         <a className="text-link" href="#/login">Back to login</a>
@@ -515,13 +531,67 @@ function RegisterPage({ form, setForm, submitRegister }) {
   );
 }
 
-function PatientPage({ eta, form, hospitals, selectedHospital, setForm, submitToken, patientTokens }) {
+function PatientPage({ patientTokens }) {
   const activeTokens = patientTokens.filter((token) => ['waiting_doctor', 'in_doctor', 'waiting_lab', 'in_lab'].includes(token.status));
   const finishedTokens = patientTokens.filter((token) => token.status === 'finished');
   return (
     <section className="page-grid">
-      <div className="panel">
-        <h2>Patient Token</h2>
+      <div className="panel emphasis">
+        <h2>Active Appointments</h2>
+        {activeTokens.length ? (
+          <ol className="patient-token-list">
+            {activeTokens.map((token) => (
+              <li key={token.id} className="active-token-card">
+                <div>
+                  <strong>#{token.token_number}</strong>
+                  <span>{token.status.replace(/_/g, ' ')}</span>
+                </div>
+                <div>
+                  <small>{token.lab_id ? 'Lab' : 'Doctor'}</small>
+                  <small>Date {new Date(token.token_date).toLocaleDateString()}</small>
+                </div>
+                <div>
+                  <span>Priority {token.priority}</span>
+                  <button type="button" className="small-button" onClick={() => deleteToken(token.id)}>Cancel</button>
+                </div>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p>No active appointments. Book a new token.</p>
+        )}
+      </div>
+      <div className="panel emphasis">
+        <h2>History</h2>
+        {finishedTokens.length ? (
+          <ol className="patient-token-list finished-list">
+            {finishedTokens.map((token) => (
+              <li key={token.id}>
+                <strong>#{token.token_number}</strong>
+                <span>{token.lab_id ? 'Lab' : 'Doctor'}</span>
+                <span>Date {new Date(token.token_date).toLocaleDateString()}</span>
+                <span>Priority {token.priority}</span>
+                <small>Finished {new Date(token.finished_at).toLocaleString()}</small>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p>No past appointments yet.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function NewTokenPage({ form, setForm, submitToken, hospitals, selectedHospital, selectedDoctor }) {
+  const selectedLab = selectedHospital?.labs?.find((lab) => String(lab.id) === String(form.labId));
+  return (
+    <section className="page-grid">
+      <div className="panel emphasis">
+        <div className="section-title">
+          <h2>Book New Appointment</h2>
+          <span className="panel-note">Same-day and 30-day appointments with priority lab referrals.</span>
+        </div>
         <form onSubmit={submitToken}>
           <label>
             Queue type
@@ -556,15 +626,25 @@ function PatientPage({ eta, form, hospitals, selectedHospital, setForm, submitTo
             />
           </label>
           {form.destination === 'doctor' ? (
-            <label>
-              Doctor
-              <select value={form.doctorId} onChange={(event) => setForm({ ...form, doctorId: event.target.value })}>
-                <option value="">Select doctor</option>
-                {selectedHospital?.doctors.map((doctor) => (
-                  <option key={doctor.id} value={doctor.id}>{doctor.name} ({doctor.dailyTokenLimit}/day)</option>
-                ))}
-              </select>
-            </label>
+            <>
+              <label>
+                Doctor
+                <select value={form.doctorId} onChange={(event) => setForm({ ...form, doctorId: event.target.value })}>
+                  <option value="">Select doctor</option>
+                  {selectedHospital?.doctors.map((doctor) => (
+                    <option key={doctor.id} value={doctor.id}>{doctor.name} ({doctor.dailyTokenLimit}/day)</option>
+                  ))}
+                </select>
+              </label>
+              {selectedDoctor && (
+                <div className="doctor-summary neon-box">
+                  <div><strong>Average service</strong> {selectedDoctor.avg_service_minutes} min</div>
+                  <div><strong>Avg wait</strong> {selectedDoctor.avg_wait_minutes} min</div>
+                  <div><strong>Tokens left</strong> {selectedDoctor.tokens_remaining}</div>
+                  <div><strong>Fee</strong> ₹{selectedDoctor.consultation_fee ?? 0}</div>
+                </div>
+              )}
+            </>
           ) : (
             <>
               <label>
@@ -582,43 +662,19 @@ function PatientPage({ eta, form, hospitals, selectedHospital, setForm, submitTo
               </label>
             </>
           )}
-          <button type="submit">Enter Queue</button>
+          <button type="submit">Book Appointment</button>
         </form>
       </div>
-      <div className="panel emphasis">
-        <h2>Current / Upcoming Appointments</h2>
-        {activeTokens.length ? (
-          <ol className="patient-token-list">
-            {activeTokens.map((token) => (
-              <li key={token.id}>
-                <strong>#{token.token_number}</strong>
-                <span>{token.status.replace(/_/g, ' ')}</span>
-                <span>{token.lab_id ? 'Lab' : 'Doctor'}</span>
-                <span>Date {new Date(token.token_date).toLocaleDateString()}</span>
-                <span>Priority {token.priority}</span>
-                <button type="button" className="small-button" onClick={() => deleteToken(token.id)}>Cancel</button>
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p>No current or upcoming appointments.</p>
-        )}
-        <h2>Finished Appointments</h2>
-        {finishedTokens.length ? (
-          <ol className="patient-token-list finished-list">
-            {finishedTokens.map((token) => (
-              <li key={token.id}>
-                <strong>#{token.token_number}</strong>
-                <span>{token.lab_id ? 'Lab' : 'Doctor'}</span>
-                <span>Date {new Date(token.token_date).toLocaleDateString()}</span>
-                <span>Priority {token.priority}</span>
-                <small>Finished {new Date(token.finished_at).toLocaleString()}</small>
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p>No finished appointments yet.</p>
-        )}
+      <div className="panel neon-box">
+        <h2>Appointment summary</h2>
+        <p className="panel-note">Selected hospital: {selectedHospital?.name || 'Choose a hospital'}{selectedHospital?.branch ? ` — ${selectedHospital.branch}` : ''}</p>
+        <div className="doctor-summary">
+          <div><strong>Queue</strong> {form.destination === 'doctor' ? 'Doctor' : 'Lab'}</div>
+          <div><strong>Date</strong> {form.tokenDate}</div>
+          <div><strong>Travel</strong> {form.travelMinutes} min</div>
+          <div><strong>Destination</strong> {form.destination === 'doctor' ? selectedDoctor?.name || 'Not selected' : selectedLab?.name || 'Not selected'}</div>
+          {selectedDoctor && <div><strong>Consultation fee</strong> ₹{selectedDoctor.consultation_fee ?? 0}</div>}
+        </div>
       </div>
     </section>
   );
@@ -635,6 +691,7 @@ function HospitalPage({ createDoctor, createLab, form, hospitalDoctors, hospital
             <label>Doctor username<input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></label>
             <label>Doctor password<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
             <label>Daily token limit<input type="number" min="1" value={form.dailyTokenLimit} onChange={(event) => setForm({ ...form, dailyTokenLimit: event.target.value })} /></label>
+            <label>Consultation fee<input type="number" min="0" value={form.consultationFee} onChange={(event) => setForm({ ...form, consultationFee: event.target.value })} /></label>
             <div className="button-row">
               <button type="submit">{editingTarget?.type === 'doctor' ? 'Update Doctor' : 'Create Doctor Login'}</button>
               {editingTarget?.type === 'doctor' && <button type="button" onClick={cancelEdit}>Cancel</button>}
