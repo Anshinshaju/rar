@@ -1152,7 +1152,15 @@ function NewTokenPage({ form, locationBusy, setForm, submitToken, hospitals, sel
           <div><strong>Date</strong> {form.tokenDate}</div>
           <div><strong>Travel</strong> {routeReady ? humanTime(travelMinutes) : 'Use current location'}</div>
           <div><strong>Destination</strong> {form.destination === 'doctor' ? selectedDoctor?.name || 'Not selected' : selectedLab?.name || 'Not selected'}</div>
-          {selectedDoctor && <div><strong>Consultation fee</strong> ₹{selectedDoctor.consultation_fee ?? 0}</div>}
+          {selectedDoctor && (
+            <>
+              <div><strong>Estimated wait</strong> {selectedDoctor.avg_wait_minutes} min</div>
+              <div><strong>Avg break minutes/day</strong> {selectedDoctor.avg_break_minutes} min</div>
+              <div><strong>Estimated breaks/day</strong> {Math.max(0, Math.round((selectedDoctor.avg_break_minutes || 0) / 30))}</div>
+              <div><strong>Tokens left</strong> {selectedDoctor.tokens_remaining}</div>
+              <div><strong>Consultation fee</strong> ₹{selectedDoctor.consultation_fee ?? 0}</div>
+            </>
+          )}
           {selectedDoctor && leaveStatus && <TimeStatus status={leaveStatus} />}
         </div>
       </div>
