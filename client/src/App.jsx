@@ -39,9 +39,10 @@ function go(route) {
 }
 
 function humanTime(minutes = 0) {
-  if (minutes <= 0) return 'now';
-  const hrs = Math.floor(minutes / 60);
-  const mins = minutes % 60;
+  if (minutes <= 0) return '0m';
+  const safeMinutes = Math.round(minutes);
+  const hrs = Math.floor(safeMinutes / 60);
+  const mins = safeMinutes % 60;
   return `${hrs ? `${hrs}h ` : ''}${mins}m`;
 }
 
@@ -593,6 +594,49 @@ function PatientPage({ patientTokens }) {
 
 function NewTokenPage({ form, setForm, submitToken, hospitals, selectedHospital, selectedDoctor }) {
   const selectedLab = selectedHospital?.labs?.find((lab) => String(lab.id) === String(form.labId));
+  const waitMinutes = selectedDoctor?.avg_wait_with_break_minutes ?? selectedDoctor?.avg_wait_minutes ?? 0;
+  const travelMinutes = Number(form.travelMinutes) || 0;
+  const minutesUntilLeave = selectedDoctor ? waitMinutes - travelMinutes : null;
+  const leaveInMinutes = Math.max(0, minutesUntilLeave ?? 0);
+  const leaveAt = selectedDoctor
+    ? new Date(Date.now() + leaveInMinutes * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : null;
+  let leaveStatus = null;
+  if (selectedDoctor) {
+    if (minutesUntilLeave < 0) {
+      leaveStatus = {
+        label: 'You will be late either way',
+        color: 'red',
+        headline: 'Leave immediately',
+        timeText: `${humanTime(Math.abs(minutesUntilLeave))} late`,
+        note: `Travel is ${humanTime(Math.abs(minutesUntilLeave))} longer than the estimated wait.`
+      };
+    } else if (minutesUntilLeave <= 5) {
+      leaveStatus = {
+        label: 'You should leave now',
+        color: 'yellow',
+        headline: 'Leave now',
+        timeText: `${humanTime(minutesUntilLeave)} buffer`,
+        note: 'This is the correct time to start from home.'
+      };
+    } else if (minutesUntilLeave <= 15) {
+      leaveStatus = {
+        label: 'You could be late',
+        color: 'orange',
+        headline: `Leave by ${leaveAt}`,
+        timeText: `${humanTime(minutesUntilLeave)} left`,
+        note: 'Your buffer is small, so delays can make you late.'
+      };
+    } else {
+      leaveStatus = {
+        label: 'You have time',
+        color: 'green',
+        headline: `Leave by ${leaveAt}`,
+        timeText: `${humanTime(minutesUntilLeave)} left`,
+        note: 'You can wait before leaving home.'
+      };
+    }
+  }
   return (
     <section className="page-grid">
       <div className="panel emphasis">
@@ -651,7 +695,10 @@ function NewTokenPage({ form, setForm, submitToken, hospitals, selectedHospital,
                   <div><strong>Queue length</strong> {selectedDoctor.queue_length}</div>
                   <div><strong>Estimated wait</strong> {selectedDoctor.avg_wait_minutes} min</div>
                   <div><strong>Wait with breaks</strong> {selectedDoctor.avg_wait_with_break_minutes} min</div>
-                  <div><strong>Tokens left</strong> {selectedDoctor.tokens_remaining}</div>
+                  <div><strong>Leave in</strong> {humanTime(leaveInMinutes)}</div>
+                  <div><strong>Leave at</strong> {leaveAt}</div>
+                  <div><strong>Travel time</strong> {travelMinutes} min</div>
+                  {leaveStatus && <TimeStatus status={leaveStatus} />}
                   <div><strong>Fee</strong> ₹{selectedDoctor.consultation_fee ?? 0}</div>
                 </div>
               )}
@@ -685,9 +732,26 @@ function NewTokenPage({ form, setForm, submitToken, hospitals, selectedHospital,
           <div><strong>Travel</strong> {form.travelMinutes} min</div>
           <div><strong>Destination</strong> {form.destination === 'doctor' ? selectedDoctor?.name || 'Not selected' : selectedLab?.name || 'Not selected'}</div>
           {selectedDoctor && <div><strong>Consultation fee</strong> ₹{selectedDoctor.consultation_fee ?? 0}</div>}
+          {selectedDoctor && leaveStatus && <TimeStatus status={leaveStatus} />}
         </div>
       </div>
     </section>
+  );
+}
+
+function TimeStatus({ status }) {
+  return (
+    <div className={`time-status ${status.color}`}>
+      <div className="time-status-main">
+        <span className="time-mark" aria-hidden="true" />
+        <div>
+          <strong>{status.label}</strong>
+          <span>{status.headline}</span>
+        </div>
+      </div>
+      <b>{status.timeText}</b>
+      <span>{status.note}</span>
+    </div>
   );
 }
 

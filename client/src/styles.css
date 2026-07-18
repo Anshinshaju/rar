@@ -294,6 +294,85 @@ button:disabled {
   font-size: 0.95rem;
 }
 
+.time-status {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  display: grid;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.time-status-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.time-status-main div {
+  display: grid;
+  gap: 2px;
+}
+
+.time-status-main strong {
+  color: #fff;
+}
+
+.time-mark {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  flex: 0 0 18px;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.08);
+}
+
+.time-status b {
+  font-size: 1.7rem;
+  line-height: 1.05;
+  color: #fff;
+}
+
+.time-status span {
+  font-size: 0.95rem;
+  color: rgba(240, 255, 240, 0.84);
+}
+
+.time-status.green {
+  background: rgba(31, 181, 88, 0.16);
+  border: 1px solid rgba(94, 229, 131, 0.28);
+}
+
+.time-status.green .time-mark {
+  background: #35e978;
+}
+
+.time-status.yellow {
+  background: rgba(245, 187, 49, 0.14);
+  border: 1px solid rgba(241, 212, 96, 0.34);
+}
+
+.time-status.yellow .time-mark {
+  background: #f7d84a;
+}
+
+.time-status.orange {
+  background: rgba(243, 128, 33, 0.14);
+  border: 1px solid rgba(248, 165, 80, 0.34);
+}
+
+.time-status.orange .time-mark {
+  background: #ff8a2b;
+}
+
+.time-status.red {
+  background: rgba(224, 55, 82, 0.14);
+  border: 1px solid rgba(241, 104, 123, 0.34);
+}
+
+.time-status.red .time-mark {
+  background: #ff405f;
+}
+
 .neon-box {
   padding: 16px;
   margin-top: 16px;
