@@ -46,6 +46,58 @@ function humanTime(minutes = 0) {
   return `${hrs ? `${hrs}h ` : ''}${mins}m`;
 }
 
+function getLeaveStatus(waitMinutes, travelMinutes) {
+  const minutesUntilLeave = waitMinutes - travelMinutes;
+  const leaveInMinutes = Math.max(0, minutesUntilLeave);
+  const leaveAt = new Date(Date.now() + leaveInMinutes * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  if (minutesUntilLeave < 0) {
+    return {
+      label: 'You will be late either way',
+      color: 'red',
+      headline: 'Leave immediately',
+      timeText: `${humanTime(Math.abs(minutesUntilLeave))} late`,
+      note: `Travel is ${humanTime(Math.abs(minutesUntilLeave))} longer than the estimated wait.`,
+      leaveAt,
+      leaveInMinutes
+    };
+  }
+
+  if (minutesUntilLeave <= 5) {
+    return {
+      label: 'You should leave now',
+      color: 'yellow',
+      headline: 'Leave now',
+      timeText: `${humanTime(minutesUntilLeave)} buffer`,
+      note: 'This is the correct time to start from home.',
+      leaveAt,
+      leaveInMinutes
+    };
+  }
+
+  if (minutesUntilLeave <= 15) {
+    return {
+      label: 'You could be late',
+      color: 'orange',
+      headline: `Leave by ${leaveAt}`,
+      timeText: `${humanTime(minutesUntilLeave)} left`,
+      note: 'Your buffer is small, so delays can make you late.',
+      leaveAt,
+      leaveInMinutes
+    };
+  }
+
+  return {
+    label: 'You have time',
+    color: 'green',
+    headline: `Leave by ${leaveAt}`,
+    timeText: `${humanTime(minutesUntilLeave)} left`,
+    note: 'You can wait before leaving home.',
+    leaveAt,
+    leaveInMinutes
+  };
+}
+
 function titleRole(role) {
   return role ? role[0].toUpperCase() + role.slice(1) : '';
 }
@@ -540,31 +592,58 @@ function RegisterPage({ form, setForm, submitRegister }) {
   );
 }
 
-function PatientPage({ patientTokens }) {
+function PatientPage({ currentUser, deleteToken, patientTokens, status }) {
   const activeTokens = patientTokens.filter((token) => ['waiting_doctor', 'in_doctor', 'waiting_lab', 'in_lab'].includes(token.status));
   const finishedTokens = patientTokens.filter((token) => token.status === 'finished');
+  const travelMinutes = Number(currentUser?.travel_minutes) || 0;
   return (
     <section className="page-grid">
       <div className="panel emphasis">
         <h2>Active Appointments</h2>
         {activeTokens.length ? (
           <ol className="patient-token-list">
-            {activeTokens.map((token) => (
-              <li key={token.id} className="active-token-card">
-                <div>
-                  <strong>#{token.token_number}</strong>
-                  <span>{token.status.replace(/_/g, ' ')}</span>
-                </div>
-                <div>
-                  <small>{token.lab_id ? 'Lab' : 'Doctor'}</small>
-                  <small>Date {new Date(token.token_date).toLocaleDateString()}</small>
-                </div>
-                <div>
-                  <span>Priority {token.priority}</span>
-                  <button type="button" className="small-button" onClick={() => deleteToken(token.id)}>Cancel</button>
-                </div>
-              </li>
-            ))}
+            {activeTokens.map((token) => {
+              const doctor = token.doctor_id ? status.doctors.find((item) => item.id === token.doctor_id) : null;
+              const waitMinutes = doctor?.avg_wait_with_break_minutes ?? doctor?.avg_wait_minutes ?? 0;
+              const leaveStatus = doctor && token.status === 'waiting_doctor'
+                ? getLeaveStatus(waitMinutes, travelMinutes)
+                : null;
+
+              return (
+                <li key={token.id} className="active-token-card">
+                  <div>
+                    <strong>#{token.token_number}</strong>
+                    <span>{token.status.replace(/_/g, ' ')}</span>
+                  </div>
+                  <div>
+                    <small>{token.lab_id ? 'Lab' : 'Doctor'}</small>
+                    <small>Date {new Date(token.token_date).toLocaleDateString()}</small>
+                  </div>
+                  {doctor && (
+                    <div>
+                      <span>{doctor.name}</span>
+                      <span>Wait {humanTime(waitMinutes)}</span>
+                    </div>
+                  )}
+                  {leaveStatus && <TimeStatus status={leaveStatus} />}
+                  {token.status === 'in_doctor' && (
+                    <div className="time-status green">
+                      <div className="time-status-main">
+                        <span className="time-mark" aria-hidden="true" />
+                        <div>
+                          <strong>Consultation started</strong>
+                          <span>You are already with the doctor.</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <div>
+                    <span>Priority {token.priority}</span>
+                    <button type="button" className="small-button" onClick={() => deleteToken(token.id)}>Cancel</button>
+                  </div>
+                </li>
+              );
+            })}
           </ol>
         ) : (
           <p>No active appointments. Book a new token.</p>
@@ -596,47 +675,7 @@ function NewTokenPage({ form, setForm, submitToken, hospitals, selectedHospital,
   const selectedLab = selectedHospital?.labs?.find((lab) => String(lab.id) === String(form.labId));
   const waitMinutes = selectedDoctor?.avg_wait_with_break_minutes ?? selectedDoctor?.avg_wait_minutes ?? 0;
   const travelMinutes = Number(form.travelMinutes) || 0;
-  const minutesUntilLeave = selectedDoctor ? waitMinutes - travelMinutes : null;
-  const leaveInMinutes = Math.max(0, minutesUntilLeave ?? 0);
-  const leaveAt = selectedDoctor
-    ? new Date(Date.now() + leaveInMinutes * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : null;
-  let leaveStatus = null;
-  if (selectedDoctor) {
-    if (minutesUntilLeave < 0) {
-      leaveStatus = {
-        label: 'You will be late either way',
-        color: 'red',
-        headline: 'Leave immediately',
-        timeText: `${humanTime(Math.abs(minutesUntilLeave))} late`,
-        note: `Travel is ${humanTime(Math.abs(minutesUntilLeave))} longer than the estimated wait.`
-      };
-    } else if (minutesUntilLeave <= 5) {
-      leaveStatus = {
-        label: 'You should leave now',
-        color: 'yellow',
-        headline: 'Leave now',
-        timeText: `${humanTime(minutesUntilLeave)} buffer`,
-        note: 'This is the correct time to start from home.'
-      };
-    } else if (minutesUntilLeave <= 15) {
-      leaveStatus = {
-        label: 'You could be late',
-        color: 'orange',
-        headline: `Leave by ${leaveAt}`,
-        timeText: `${humanTime(minutesUntilLeave)} left`,
-        note: 'Your buffer is small, so delays can make you late.'
-      };
-    } else {
-      leaveStatus = {
-        label: 'You have time',
-        color: 'green',
-        headline: `Leave by ${leaveAt}`,
-        timeText: `${humanTime(minutesUntilLeave)} left`,
-        note: 'You can wait before leaving home.'
-      };
-    }
-  }
+  const leaveStatus = selectedDoctor ? getLeaveStatus(waitMinutes, travelMinutes) : null;
   return (
     <section className="page-grid">
       <div className="panel emphasis">
@@ -695,8 +734,8 @@ function NewTokenPage({ form, setForm, submitToken, hospitals, selectedHospital,
                   <div><strong>Queue length</strong> {selectedDoctor.queue_length}</div>
                   <div><strong>Estimated wait</strong> {selectedDoctor.avg_wait_minutes} min</div>
                   <div><strong>Wait with breaks</strong> {selectedDoctor.avg_wait_with_break_minutes} min</div>
-                  <div><strong>Leave in</strong> {humanTime(leaveInMinutes)}</div>
-                  <div><strong>Leave at</strong> {leaveAt}</div>
+                  <div><strong>Leave in</strong> {humanTime(leaveStatus.leaveInMinutes)}</div>
+                  <div><strong>Leave at</strong> {leaveStatus.leaveAt}</div>
                   <div><strong>Travel time</strong> {travelMinutes} min</div>
                   {leaveStatus && <TimeStatus status={leaveStatus} />}
                   <div><strong>Fee</strong> ₹{selectedDoctor.consultation_fee ?? 0}</div>
