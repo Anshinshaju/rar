@@ -27,6 +27,16 @@ const emptyForm = {
   branch: ''
 };
 
+const emptyProfileForm = {
+  name: '',
+  username: '',
+  password: '',
+  branch: '',
+  locationAddress: '',
+  latitude: '',
+  longitude: ''
+};
+
 const roleHome = {
   admin: 'admin',
   hospital: 'hospital',
@@ -192,6 +202,8 @@ function App() {
   const [userLocation, setUserLocation] = useState(null);
   const [travelInfo, setTravelInfo] = useState(null);
   const [locationBusy, setLocationBusy] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileForm, setProfileForm] = useState(emptyProfileForm);
 
   useEffect(() => {
     const onHashChange = () => setRoute(getRoute());
@@ -337,6 +349,24 @@ function App() {
       }));
     }
   }, [currentUser?.role, hospitalProfile?.id, hospitalProfile?.location_address, hospitalProfile?.latitude, hospitalProfile?.longitude]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setProfileForm(emptyProfileForm);
+      setProfileOpen(false);
+      return;
+    }
+
+    setProfileForm({
+      name: currentUser.name || '',
+      username: currentUser.username || '',
+      password: '',
+      branch: hospitalProfile?.branch || '',
+      locationAddress: hospitalProfile?.location_address || '',
+      latitude: hospitalProfile?.latitude ?? '',
+      longitude: hospitalProfile?.longitude ?? ''
+    });
+  }, [currentUser?.id, currentUser?.name, currentUser?.username, hospitalProfile?.id, hospitalProfile?.branch, hospitalProfile?.location_address, hospitalProfile?.latitude, hospitalProfile?.longitude]);
 
   async function submitLogin(event) {
     event.preventDefault();
@@ -620,6 +650,77 @@ function App() {
     }
   }
 
+  async function geocodeProfileLocation(event) {
+    event?.preventDefault();
+    if (!profileForm.locationAddress.trim()) {
+      setMessage('Enter the hospital address first.');
+      return;
+    }
+    setLocationBusy(true);
+    try {
+      const location = await geocodeAddress(profileForm.locationAddress);
+      setProfileForm((prev) => ({
+        ...prev,
+        locationAddress: location.label,
+        latitude: location.latitude,
+        longitude: location.longitude
+      }));
+      setMessage('Map location found.');
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setLocationBusy(false);
+    }
+  }
+
+  async function updatePatientProfile(event) {
+    event.preventDefault();
+    try {
+      const data = await api(`/users/${currentUser.id}/profile`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: profileForm.name,
+          username: profileForm.username,
+          password: profileForm.password
+        })
+      });
+      setCurrentUser(data.user);
+      setProfileForm((prev) => ({ ...prev, password: '' }));
+      setProfileOpen(false);
+      setMessage('Profile updated.');
+      await fetchPatientTokens(data.user.id);
+      refresh();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function updateHospitalProfile(event) {
+    event.preventDefault();
+    try {
+      const data = await api(`/hospitals/${currentUser.hospital_id}/profile`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          userId: currentUser.id,
+          name: profileForm.name,
+          username: profileForm.username,
+          password: profileForm.password,
+          branch: profileForm.branch,
+          locationAddress: profileForm.locationAddress,
+          latitude: profileForm.latitude,
+          longitude: profileForm.longitude
+        })
+      });
+      setCurrentUser(data.user);
+      setProfileForm((prev) => ({ ...prev, password: '' }));
+      setProfileOpen(false);
+      setMessage('Hospital profile updated.');
+      refresh();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
   async function saveHospitalLocation(event) {
     event.preventDefault();
     try {
@@ -671,10 +772,17 @@ function App() {
     editingTarget,
     deleteToken,
     locationBusy,
+    profileForm,
+    profileOpen,
     saveHospitalLocation,
+    setProfileForm,
+    setProfileOpen,
     travelInfo,
+    updateHospitalProfile,
+    updatePatientProfile,
     useCurrentLocation,
-    userLocation
+    userLocation,
+    geocodeProfileLocation
   };
 
   return (
@@ -773,13 +881,23 @@ function RegisterPage({ form, geocodeHospitalLocation, locationBusy, setForm, su
           {form.role === 'hospital' && (
             <>
               <label>Hospital branch<input value={form.branch} onChange={(event) => setForm({ ...form, branch: event.target.value })} /></label>
-              <label>Hospital address<input value={form.locationAddress} onChange={(event) => setForm({ ...form, locationAddress: event.target.value })} /></label>
-              <div className="button-row">
-                <button type="button" className="small-button" onClick={geocodeHospitalLocation} disabled={locationBusy}>Find On Map</button>
-              </div>
-              <div className="coordinate-grid">
-                <label>Latitude<input type="number" step="any" value={form.latitude} onChange={(event) => setForm({ ...form, latitude: event.target.value })} /></label>
-                <label>Longitude<input type="number" step="any" value={form.longitude} onChange={(event) => setForm({ ...form, longitude: event.target.value })} /></label>
+              <div className="location-box register-location-box">
+                <div>
+                  <strong>Hospital Map Location</strong>
+                  <span>Add the hospital address here so patients can use current location and get live travel time.</span>
+                </div>
+                <label>Hospital address<input value={form.locationAddress} onChange={(event) => setForm({ ...form, locationAddress: event.target.value })} /></label>
+                <div className="button-row">
+                  <button type="button" className="small-button" onClick={geocodeHospitalLocation} disabled={locationBusy}>
+                    {locationBusy ? 'Finding...' : 'Find Address On Map'}
+                  </button>
+                  {hasCoords(form) && <span className="panel-note">Map point ready</span>}
+                </div>
+                <div className="coordinate-grid">
+                  <label>Latitude<input type="number" step="any" value={form.latitude} onChange={(event) => setForm({ ...form, latitude: event.target.value })} /></label>
+                  <label>Longitude<input type="number" step="any" value={form.longitude} onChange={(event) => setForm({ ...form, longitude: event.target.value })} /></label>
+                </div>
+                <small>Maps by OpenStreetMap.</small>
               </div>
             </>
           )}
@@ -791,7 +909,7 @@ function RegisterPage({ form, geocodeHospitalLocation, locationBusy, setForm, su
   );
 }
 
-function PatientPage({ currentUser, deleteToken, locationBusy, patientTokens, status, useCurrentLocation, userLocation }) {
+function PatientPage({ currentUser, deleteToken, locationBusy, patientTokens, profileForm, profileOpen, setProfileForm, setProfileOpen, status, updatePatientProfile, useCurrentLocation, userLocation }) {
   const activeTokens = patientTokens.filter((token) => ['waiting_doctor', 'in_doctor', 'waiting_lab', 'in_lab'].includes(token.status));
   const finishedTokens = patientTokens.filter((token) => token.status === 'finished');
   return (
@@ -808,6 +926,28 @@ function PatientPage({ currentUser, deleteToken, locationBusy, patientTokens, st
             {locationBusy ? 'Locating...' : 'Use Current Location'}
           </button>
         </div>
+      </section>
+      <section className="panel profile-panel">
+        <div className="section-title">
+          <div>
+            <h2>Patient Profile</h2>
+            <span className="panel-note">{currentUser.name} / {currentUser.username}</span>
+          </div>
+          <button type="button" className="small-button" onClick={() => setProfileOpen(!profileOpen)}>
+            {profileOpen ? 'Close' : 'Edit Profile'}
+          </button>
+        </div>
+        {profileOpen && (
+          <form onSubmit={updatePatientProfile} className="profile-form">
+            <label>Name<input value={profileForm.name} onChange={(event) => setProfileForm({ ...profileForm, name: event.target.value })} /></label>
+            <label>Username<input value={profileForm.username} onChange={(event) => setProfileForm({ ...profileForm, username: event.target.value })} /></label>
+            <label>New password<input type="password" placeholder="Leave blank to keep old password" value={profileForm.password} onChange={(event) => setProfileForm({ ...profileForm, password: event.target.value })} /></label>
+            <div className="button-row">
+              <button type="submit">Save Profile</button>
+              <button type="button" className="small-button" onClick={() => setProfileOpen(false)}>Cancel</button>
+            </div>
+          </form>
+        )}
       </section>
       <section className="page-grid">
         <div className="panel emphasis">
@@ -1036,9 +1176,49 @@ function TimeStatus({ status }) {
   );
 }
 
-function HospitalPage({ createDoctor, createLab, form, geocodeHospitalLocation, hospitalDoctors, hospitalLabs, hospitalProfile, locationBusy, saveHospitalLocation, setForm, deleteDoctor, deleteLab, editDoctor, editLab, cancelEdit, editingTarget }) {
+function HospitalPage({ createDoctor, createLab, form, geocodeHospitalLocation, geocodeProfileLocation, hospitalDoctors, hospitalLabs, hospitalProfile, locationBusy, profileForm, profileOpen, saveHospitalLocation, setForm, setProfileForm, setProfileOpen, updateHospitalProfile, deleteDoctor, deleteLab, editDoctor, editLab, cancelEdit, editingTarget }) {
   return (
     <>
+      <section className="panel profile-panel">
+        <div className="section-title">
+          <div>
+            <h2>Hospital Profile</h2>
+            <span className="panel-note">{hospitalProfile?.name || profileForm.name}{hospitalProfile?.branch ? ` / ${hospitalProfile.branch}` : ''}</span>
+          </div>
+          <button type="button" className="small-button" onClick={() => setProfileOpen(!profileOpen)}>
+            {profileOpen ? 'Close' : 'Edit Profile'}
+          </button>
+        </div>
+        {profileOpen && (
+          <form onSubmit={updateHospitalProfile} className="profile-form">
+            <label>Hospital name<input value={profileForm.name} onChange={(event) => setProfileForm({ ...profileForm, name: event.target.value })} /></label>
+            <label>Username<input value={profileForm.username} onChange={(event) => setProfileForm({ ...profileForm, username: event.target.value })} /></label>
+            <label>New password<input type="password" placeholder="Leave blank to keep old password" value={profileForm.password} onChange={(event) => setProfileForm({ ...profileForm, password: event.target.value })} /></label>
+            <label>Hospital branch<input value={profileForm.branch} onChange={(event) => setProfileForm({ ...profileForm, branch: event.target.value })} /></label>
+            <div className="location-box">
+              <div>
+                <strong>Hospital Map Location</strong>
+                <span>This is what patients use for automatic travel time.</span>
+              </div>
+              <label>Hospital address<input value={profileForm.locationAddress} onChange={(event) => setProfileForm({ ...profileForm, locationAddress: event.target.value })} /></label>
+              <div className="button-row">
+                <button type="button" className="small-button" onClick={geocodeProfileLocation} disabled={locationBusy}>
+                  {locationBusy ? 'Finding...' : 'Find Address On Map'}
+                </button>
+                {hasCoords(profileForm) && <span className="panel-note">Map point ready</span>}
+              </div>
+              <div className="coordinate-grid">
+                <label>Latitude<input type="number" step="any" value={profileForm.latitude} onChange={(event) => setProfileForm({ ...profileForm, latitude: event.target.value })} /></label>
+                <label>Longitude<input type="number" step="any" value={profileForm.longitude} onChange={(event) => setProfileForm({ ...profileForm, longitude: event.target.value })} /></label>
+              </div>
+            </div>
+            <div className="button-row">
+              <button type="submit">Save Profile</button>
+              <button type="button" className="small-button" onClick={() => setProfileOpen(false)}>Cancel</button>
+            </div>
+          </form>
+        )}
+      </section>
       <section className="panel">
         <div className="section-title">
           <h2>Hospital Location</h2>

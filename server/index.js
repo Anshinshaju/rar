@@ -486,6 +486,74 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+app.patch('/api/users/:userId/profile', async (req, res) => {
+  const missing = requireFields(req.body, ['name', 'username']);
+  if (missing) return res.status(400).json({ error: missing });
+
+  try {
+    const result = await query(
+      `UPDATE users
+          SET name = $1,
+              username = $2,
+              password = CASE WHEN $3 = '' THEN password ELSE $3 END
+        WHERE id = $4 AND role = 'patient'
+        RETURNING *`,
+      [req.body.name, req.body.username, req.body.password || '', req.params.userId]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Patient not found.' });
+    res.json({ user: sanitizeUser(result.rows[0]) });
+  } catch (error) {
+    res.status(400).json({ error: error.code === '23505' ? 'Username already exists.' : error.message });
+  }
+});
+
+app.patch('/api/hospitals/:hospitalId/profile', async (req, res) => {
+  const missing = requireFields(req.body, ['name', 'username']);
+  if (missing) return res.status(400).json({ error: missing });
+
+  const client = await pool.connect();
+  try {
+    const latitude = req.body.latitude === '' || req.body.latitude == null ? null : Number(req.body.latitude);
+    const longitude = req.body.longitude === '' || req.body.longitude == null ? null : Number(req.body.longitude);
+    if ((latitude != null && Number.isNaN(latitude)) || (longitude != null && Number.isNaN(longitude))) {
+      throw new Error('Invalid hospital coordinates.');
+    }
+
+    await client.query('BEGIN');
+    const hospital = await client.query(
+      `UPDATE hospitals
+          SET name = $1,
+              branch = $2,
+              location_address = $3,
+              latitude = $4,
+              longitude = $5
+        WHERE id = $6
+        RETURNING *`,
+      [req.body.name, req.body.branch || '', req.body.locationAddress || '', latitude, longitude, req.params.hospitalId]
+    );
+    if (!hospital.rows[0]) throw new Error('Hospital not found.');
+
+    const user = await client.query(
+      `UPDATE users
+          SET name = $1,
+              username = $2,
+              password = CASE WHEN $3 = '' THEN password ELSE $3 END
+        WHERE id = $4 AND role = 'hospital' AND hospital_id = $5
+        RETURNING *`,
+      [req.body.name, req.body.username, req.body.password || '', req.body.userId, req.params.hospitalId]
+    );
+    if (!user.rows[0]) throw new Error('Hospital login not found.');
+
+    await client.query('COMMIT');
+    res.json({ hospital: hospital.rows[0], user: sanitizeUser(user.rows[0]) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: error.code === '23505' ? 'Username already exists.' : error.message });
+  } finally {
+    client.release();
+  }
+});
+
 app.get('/api/tokens', async (req, res) => {
   try {
     const userId = Number(req.query.userId);
