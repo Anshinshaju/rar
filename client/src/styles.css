@@ -303,6 +303,10 @@ button:disabled {
   background: rgba(0, 0, 0, 0.28);
 }
 
+.patient-location-panel {
+  border-color: rgba(13, 253, 158, 0.34);
+}
+
 .location-box div {
   display: grid;
   gap: 4px;

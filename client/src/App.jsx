@@ -764,6 +764,12 @@ function RegisterPage({ form, geocodeHospitalLocation, locationBusy, setForm, su
           <label>{form.role === 'hospital' ? 'Hospital name' : 'Patient name'}<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
           <label>Username<input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></label>
           <label>Password<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
+          {form.role === 'patient' && (
+            <div className="location-box">
+              <strong>Travel time is automatic</strong>
+              <span>After login, use current location to calculate travel time to the selected hospital.</span>
+            </div>
+          )}
           {form.role === 'hospital' && (
             <>
               <label>Hospital branch<input value={form.branch} onChange={(event) => setForm({ ...form, branch: event.target.value })} /></label>
@@ -789,8 +795,22 @@ function PatientPage({ currentUser, deleteToken, locationBusy, patientTokens, st
   const activeTokens = patientTokens.filter((token) => ['waiting_doctor', 'in_doctor', 'waiting_lab', 'in_lab'].includes(token.status));
   const finishedTokens = patientTokens.filter((token) => token.status === 'finished');
   return (
-    <section className="page-grid">
-      <div className="panel emphasis">
+    <>
+      <section className="panel patient-location-panel">
+        <div className="section-title">
+          <div>
+            <h2>Location & Travel</h2>
+            <span className="panel-note">
+              {userLocation ? 'Current location is ready for travel-time checks.' : 'Use current location before booking or checking when to leave.'}
+            </span>
+          </div>
+          <button type="button" className="small-button" onClick={useCurrentLocation} disabled={locationBusy}>
+            {locationBusy ? 'Locating...' : 'Use Current Location'}
+          </button>
+        </div>
+      </section>
+      <section className="page-grid">
+        <div className="panel emphasis">
         <div className="section-title">
           <h2>Active Appointments</h2>
           <button type="button" className="small-button" onClick={useCurrentLocation} disabled={locationBusy}>
@@ -881,7 +901,8 @@ function PatientPage({ currentUser, deleteToken, locationBusy, patientTokens, st
           <p>No past appointments yet.</p>
         )}
       </div>
-    </section>
+      </section>
+    </>
   );
 }
 
