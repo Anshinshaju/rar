@@ -819,6 +819,15 @@ app.post('/api/tokens', async (req, res) => {
     const patient = await client.query("SELECT * FROM users WHERE id = $1 AND role = 'patient'", [req.body.userId]);
     if (!patient.rows[0]) throw new Error('Patient login required.');
 
+    // If client provided travelMinutes update patient's stored travel_minutes
+    if (req.body.travelMinutes != null) {
+      const mins = Number(req.body.travelMinutes) || 0;
+      await client.query('UPDATE users SET travel_minutes = $1 WHERE id = $2', [mins, patient.rows[0].id]);
+      // refresh patient row
+      const refreshed = await client.query('SELECT * FROM users WHERE id = $1', [patient.rows[0].id]);
+      patient.rows[0] = refreshed.rows[0];
+    }
+
     const requestedDate = req.body.tokenDate ? new Date(req.body.tokenDate) : new Date();
     if (Number.isNaN(requestedDate.getTime())) throw new Error('Invalid token date.');
     const today = new Date();

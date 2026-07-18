@@ -181,6 +181,20 @@ async function geocodeAddress(address) {
   };
 }
 
+async function geocodeWithGoogle(address) {
+  const key = window.__GOOGLE_MAPS_API_KEY__;
+  if (!key) throw new Error('Google Maps API key not provided.');
+  const resp = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${encodeURIComponent(key)}`);
+  const json = await resp.json();
+  const result = json.results?.[0];
+  if (!result) throw new Error('Could not find that location using Google Maps.');
+  return {
+    latitude: result.geometry.location.lat,
+    longitude: result.geometry.location.lng,
+    label: result.formatted_address
+  };
+}
+
 function titleRole(role) {
   return role ? role[0].toUpperCase() + role.slice(1) : '';
 }
@@ -425,6 +439,7 @@ function App() {
         setMessage('Use current location first so travel time can be calculated.');
         return;
       }
+      const travelMinutesToSend = travelInfo?.minutes || Number(form.travelMinutes) || Number(currentUser.travel_minutes) || 0;
       const data = await api('/tokens', {
         method: 'POST',
         body: JSON.stringify({
@@ -433,7 +448,8 @@ function App() {
           doctorId: form.doctorId,
           labId: form.labId,
           prescribedLab: form.prescribedLab,
-          tokenDate: form.tokenDate
+          tokenDate: form.tokenDate,
+          travelMinutes: travelMinutesToSend
         })
       });
       const travel = Number(form.travelMinutes) || Number(currentUser.travel_minutes) || 0;
@@ -635,7 +651,13 @@ function App() {
     }
     setLocationBusy(true);
     try {
-      const location = await geocodeAddress(form.locationAddress);
+      let location;
+      // Prefer Google geocoding if client sets window.__GOOGLE_MAPS_API_KEY__
+      if (window.__GOOGLE_MAPS_API_KEY__) {
+        try { location = await geocodeWithGoogle(form.locationAddress); } catch (e) { location = await geocodeAddress(form.locationAddress); }
+      } else {
+        location = await geocodeAddress(form.locationAddress);
+      }
       setForm((prev) => ({
         ...prev,
         locationAddress: location.label,
@@ -658,7 +680,12 @@ function App() {
     }
     setLocationBusy(true);
     try {
-      const location = await geocodeAddress(profileForm.locationAddress);
+      let location;
+      if (window.__GOOGLE_MAPS_API_KEY__) {
+        try { location = await geocodeWithGoogle(profileForm.locationAddress); } catch (e) { location = await geocodeAddress(profileForm.locationAddress); }
+      } else {
+        location = await geocodeAddress(profileForm.locationAddress);
+      }
       setProfileForm((prev) => ({
         ...prev,
         locationAddress: location.label,
@@ -890,6 +917,17 @@ function RegisterPage({ form, geocodeHospitalLocation, locationBusy, setForm, su
                 <div className="button-row">
                   <button type="button" className="small-button" onClick={geocodeHospitalLocation} disabled={locationBusy}>
                     {locationBusy ? 'Finding...' : 'Find Address On Map'}
+                  </button>
+                  <button type="button" className="small-button" onClick={() => {
+                    if (hasCoords(form)) {
+                      window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(form.latitude + ',' + form.longitude)}`);
+                    } else if (form.locationAddress) {
+                      window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(form.locationAddress)}`);
+                    } else {
+                      setMessage('No address or coordinates to open in Maps.');
+                    }
+                  }}>
+                    Open in Google Maps
                   </button>
                   {hasCoords(form) && <span className="panel-note">Map point ready</span>}
                 </div>
@@ -1236,6 +1274,15 @@ function HospitalPage({ createDoctor, createLab, form, geocodeHospitalLocation, 
           <label>Hospital address<input value={form.locationAddress} onChange={(event) => setForm({ ...form, locationAddress: event.target.value })} /></label>
           <div className="button-row">
             <button type="button" className="small-button" onClick={geocodeHospitalLocation} disabled={locationBusy}>Find On Map</button>
+            <button type="button" className="small-button" onClick={() => {
+              if (hasCoords(profileForm)) {
+                window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(profileForm.latitude + ',' + profileForm.longitude)}`);
+              } else if (profileForm.locationAddress) {
+                window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(profileForm.locationAddress)}`);
+              } else {
+                setMessage('No address or coordinates to open in Maps.');
+              }
+            }}>Open in Google Maps</button>
             <button type="submit">Save Location</button>
           </div>
           <div className="coordinate-grid">
