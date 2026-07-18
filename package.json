@@ -6,9 +6,9 @@
     "start": "npm run dev",
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "server": "nodemon server/index.js",
-    "client": "vite --config client/vite.config.js",
-    "build": "vite build --config client/vite.config.js",
-    "preview": "vite preview --config client/vite.config.js"
+    "client": "npm exec vite -- --config client/vite.config.js",
+    "build": "npm exec vite -- build --config client/vite.config.js",
+    "preview": "npm exec vite -- preview --config client/vite.config.js"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.3",
