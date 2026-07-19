@@ -837,7 +837,9 @@ function App() {
     updatePatientProfile,
     useCurrentLocation,
     userLocation,
-    geocodeProfileLocation
+    setMessage,
+    geocodeProfileLocation,
+    setUserLocation
   };
 
   return (
@@ -983,9 +985,12 @@ function RegisterPage({ form, geocodeHospitalLocation, locationBusy, setForm, su
   );
 }
 
-function PatientPage({ currentUser, deleteToken, locationBusy, patientTokens, profileForm, profileOpen, setProfileForm, setProfileOpen, status, updatePatientProfile, useCurrentLocation, userLocation }) {
+function PatientPage({ currentUser, deleteToken, locationBusy, patientTokens, profileForm, profileOpen, setProfileForm, setProfileOpen, status, updatePatientProfile, useCurrentLocation, userLocation, selectedHospital, setUserLocation }) {
   const activeTokens = patientTokens.filter((token) => ['waiting_doctor', 'in_doctor', 'waiting_lab', 'in_lab'].includes(token.status));
   const finishedTokens = patientTokens.filter((token) => token.status === 'finished');
+  const hospitalLocation = selectedHospital && hasCoords(selectedHospital)
+    ? { latitude: Number(selectedHospital.latitude), longitude: Number(selectedHospital.longitude) }
+    : null;
   return (
     <>
       <section className="panel patient-location-panel">
@@ -996,10 +1001,22 @@ function PatientPage({ currentUser, deleteToken, locationBusy, patientTokens, pr
               {userLocation ? 'Current location is ready for travel-time checks.' : 'Use current location before booking or checking when to leave.'}
             </span>
           </div>
-          <button type="button" className="small-button" onClick={useCurrentLocation} disabled={locationBusy}>
-            {locationBusy ? 'Locating...' : 'Use Current Location'}
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" className="small-button" onClick={useCurrentLocation} disabled={locationBusy}>
+              {locationBusy ? 'Locating...' : 'Use Current Location'}
+            </button>
+            <button type="button" className="small-button" onClick={() => {
+              // sample coordinates near central point to verify map: New Delhi
+              setUserLocation({ latitude: 28.6139, longitude: 77.2090 });
+              setMessage('Placed sample location to verify map.');
+            }}>Show Sample Map</button>
+          </div>
         </div>
+        {(userLocation || hospitalLocation) && (
+          <div style={{ marginTop: 10 }}>
+            <MapPreview userLocation={userLocation} hospitalLocation={hospitalLocation} />
+          </div>
+        )}
       </section>
       <section className="panel profile-panel">
         <div className="section-title">
@@ -1059,6 +1076,11 @@ function PatientPage({ currentUser, deleteToken, locationBusy, patientTokens, pr
                 ? getLeaveStatus(waitMinutes, travelMinutes)
                 : null;
 
+              // derive hospital location for route button
+              const tokenHospitalLocation = hasCoords({ latitude: token.hospital_latitude, longitude: token.hospital_longitude })
+                ? { latitude: Number(token.hospital_latitude), longitude: Number(token.hospital_longitude) }
+                : null;
+
               return (
                 <li key={token.id} className="active-token-card">
                   <div>
@@ -1096,7 +1118,12 @@ function PatientPage({ currentUser, deleteToken, locationBusy, patientTokens, pr
                   )}
                   <div>
                     <span>Priority {token.priority}</span>
-                    <button type="button" className="small-button" onClick={() => deleteToken(token.id)}>Cancel</button>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" className="small-button" onClick={() => deleteToken(token.id)}>Cancel</button>
+                      {tokenHospitalLocation && (
+                        <RouteToggleButton hospitalLocation={tokenHospitalLocation} />
+                      )}
+                    </div>
                   </div>
                 </li>
               );
@@ -1265,6 +1292,103 @@ function TimeStatus({ status }) {
       <span>{status.note}</span>
     </div>
   );
+}
+
+function MapPreview({ userLocation, hospitalLocation, routeTarget }) {
+  useEffect(() => {
+    if (!window.L) return;
+    const id = 'patient-map';
+    const container = document.getElementById(id);
+    if (!container) return;
+    container.innerHTML = '';
+    const map = window.L.map(container, { zoomControl: false, attributionControl: false }).setView([20, 78], 3);
+    window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+    const markers = [];
+    let poly = null;
+    try {
+      if (hospitalLocation) {
+        const m = window.L.marker([hospitalLocation.latitude, hospitalLocation.longitude]).addTo(map).bindPopup('Hospital');
+        markers.push(m);
+      }
+      if (userLocation) {
+        const m2 = window.L.marker([userLocation.latitude, userLocation.longitude]).addTo(map).bindPopup('You');
+        markers.push(m2);
+      }
+
+      async function drawRoute(from, to) {
+        try {
+          const url = `${OSRM}/${from.longitude},${from.latitude};${to.longitude},${to.latitude}?overview=full&geometries=geojson`;
+          const resp = await fetch(url);
+          const json = await resp.json();
+          const coords = json.routes?.[0]?.geometry?.coordinates;
+          if (coords && coords.length) {
+            const latlngs = coords.map(([lon, lat]) => [lat, lon]);
+            poly = window.L.polyline(latlngs, { color: '#00ff99', weight: 4, opacity: 0.8 }).addTo(map);
+            return;
+          }
+        } catch (e) {
+          // fallthrough to straight line
+        }
+        // fallback straight line
+        const straight = [ [from.latitude, from.longitude], [to.latitude, to.longitude] ];
+        poly = window.L.polyline(straight, { color: '#00ff99', weight: 3, dashArray: '6,6' }).addTo(map);
+      }
+
+      // listen to global route target events if routeTarget not passed directly
+      const effectiveRouteTarget = routeTarget || window.__queuepilot_route_target || null;
+      if (markers.length) {
+        const group = window.L.featureGroup(markers);
+        if (effectiveRouteTarget && userLocation) {
+          drawRoute(userLocation, effectiveRouteTarget).then(() => {
+            try {
+              map.fitBounds(group.getBounds().pad(0.5));
+            } catch (e) {}
+          });
+        } else {
+          try { map.fitBounds(group.getBounds().pad(0.5)); } catch (e) { }
+        }
+      }
+      function onRouteChange() {
+        // re-render map by re-dispatching effect — simple way: call drawRoute again
+        const newTarget = window.__queuepilot_route_target || null;
+        if (newTarget && userLocation) {
+          drawRoute(userLocation, newTarget);
+        } else {
+          try { if (poly) { map.removeLayer(poly); poly = null; } } catch (e) {}
+        }
+      }
+      window.addEventListener('queuepilot:routechange', onRouteChange);
+    } catch (e) {
+      // ignore map placement errors
+    }
+    return () => {
+      try { window.removeEventListener('queuepilot:routechange', onRouteChange); } catch (e) {}
+      try { map.off(); map.remove(); } catch (e) {}
+    };
+  }, [userLocation, hospitalLocation, routeTarget]);
+
+  return <div id="patient-map" style={{ height: '200px', width: '100%', borderRadius: 6, overflow: 'hidden' }} />;
+}
+
+function RouteToggleButton({ hospitalLocation }) {
+  const [active, setActive] = useState(false);
+  // communicate via global window for simplicity in this single-file app
+  function toggle() {
+    setActive((s) => {
+      const next = !s;
+      if (next) {
+        window.__queuepilot_route_target = hospitalLocation;
+      } else {
+        window.__queuepilot_route_target = null;
+      }
+      // dispatch an event so MapPreview can pick up changes
+      window.dispatchEvent(new Event('queuepilot:routechange'));
+      return next;
+    });
+  }
+  return <button type="button" className="small-button" onClick={toggle}>{active ? 'Hide Route' : 'Show Route'}</button>;
 }
 
 function MapPicker({ open, initial, onPick, onClose, title }) {
