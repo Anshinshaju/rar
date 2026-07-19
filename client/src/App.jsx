@@ -1163,6 +1163,9 @@ function NewTokenPage({ form, locationBusy, setForm, submitToken, hospitals, sel
   const routeReady = Boolean(userLocation && travelInfo && !travelInfo.loading && travelInfo.hospitalId === selectedHospital?.id);
   const leaveStatus = selectedDoctor && routeReady ? getLeaveStatus(waitMinutes, travelMinutes) : null;
   const hospitalHasLocation = hasCoords(selectedHospital);
+  const destinationLocation = hospitalHasLocation
+    ? selectedHospital.location_address || `${Number(selectedHospital.latitude).toFixed(6)}, ${Number(selectedHospital.longitude).toFixed(6)}`
+    : 'Choose a hospital';
   return (
     <section className="page-grid">
       <div className="panel emphasis">
@@ -1261,7 +1264,7 @@ function NewTokenPage({ form, locationBusy, setForm, submitToken, hospitals, sel
           <div><strong>Queue</strong> {form.destination === 'doctor' ? 'Doctor' : 'Lab'}</div>
           <div><strong>Date</strong> {form.tokenDate}</div>
           <div><strong>Travel</strong> {routeReady ? humanTime(travelMinutes) : 'Use current location'}</div>
-          <div><strong>Destination</strong> {form.destination === 'doctor' ? selectedDoctor?.name || 'Not selected' : selectedLab?.name || 'Not selected'}</div>
+          <div><strong>Destination</strong> {destinationLocation}</div>
           {selectedDoctor && (
             <>
               <div><strong>Estimated wait</strong> {selectedDoctor.avg_wait_minutes} min</div>
@@ -1642,6 +1645,7 @@ function HospitalPage({ createDoctor, createLab, form, geocodeHospitalLocation, 
 }
 
 function DoctorPage({ doctorAction, doctorUser, hospitalLabs }) {
+  const [patientTarget, setPatientTarget] = useState('');
   if (!doctorUser) return <MissingPanel label="doctor" />;
   return (
     <section className="panel">
@@ -1656,8 +1660,16 @@ function DoctorPage({ doctorAction, doctorUser, hospitalLabs }) {
         <span>Current patient</span>
         <strong>{doctorUser.current?.patient_name || 'None'}</strong>
       </div>
+      <label>
+        Emergency patient override
+        <input
+          value={patientTarget}
+          onChange={(event) => setPatientTarget(event.target.value)}
+          placeholder="Leave empty for next patient, or type name / queue number"
+        />
+      </label>
       <div className="action-group">
-        <button type="button" onClick={() => doctorAction('next')} disabled={doctorUser.on_break || doctorUser.current}>Next Patient</button>
+        <button type="button" onClick={() => doctorAction('next', { patient: patientTarget.trim() })} disabled={doctorUser.on_break || doctorUser.current}>Next Patient</button>
         <button type="button" onClick={() => doctorAction('send-lab', { labId: hospitalLabs[0]?.id })} disabled={!doctorUser.current}>Send To Lab Queue</button>
         <button type="button" onClick={() => doctorAction('finish')} disabled={!doctorUser.current}>Finish Patient</button>
         <button type="button" onClick={() => doctorAction('break')}>{doctorUser.on_break ? 'End Break' : 'Take Break'}</button>
@@ -1668,6 +1680,7 @@ function DoctorPage({ doctorAction, doctorUser, hospitalLabs }) {
 }
 
 function LabPage({ labAction, labUser }) {
+  const [patientTarget, setPatientTarget] = useState('');
   if (!labUser) return <MissingPanel label="lab" />;
   return (
     <section className="panel">
@@ -1679,8 +1692,16 @@ function LabPage({ labAction, labUser }) {
         <Metric label="Daily limit" value={labUser.daily_token_limit} />
       </div>
       <div className="action-group">
-        <button type="button" onClick={() => labAction('start')} disabled={labUser.active_patients.length >= labUser.capacity}>Start Next Patient</button>
+        <button type="button" onClick={() => labAction('start', { patient: patientTarget.trim() })} disabled={labUser.active_patients.length >= labUser.capacity}>Start Next Patient</button>
       </div>
+      <label>
+        Emergency patient override
+        <input
+          value={patientTarget}
+          onChange={(event) => setPatientTarget(event.target.value)}
+          placeholder="Leave empty for next patient, or type name / queue number"
+        />
+      </label>
       <QueueList
         title="Active patients"
         items={labUser.active_patients}

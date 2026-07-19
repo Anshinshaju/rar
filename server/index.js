@@ -962,14 +962,26 @@ app.post('/api/doctors/:doctorId/next', async (req, res) => {
     );
     if (active.rows[0]) throw new Error('Finish current patient first.');
 
-    const next = await client.query(
-      `SELECT * FROM tokens
-        WHERE doctor_id = $1 AND status = 'waiting_doctor'
-        ORDER BY created_at
-        LIMIT 1
-        FOR UPDATE SKIP LOCKED`,
-      [req.params.doctorId]
-    );
+    const selector = String(req.body?.patient || '').trim();
+    const next = selector
+      ? await client.query(
+        `SELECT * FROM tokens
+          WHERE doctor_id = $1
+            AND status = 'waiting_doctor'
+            AND (token_number::text = $2 OR LOWER(patient_name) = LOWER($2))
+          ORDER BY created_at
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED`,
+        [req.params.doctorId, selector]
+      )
+      : await client.query(
+        `SELECT * FROM tokens
+          WHERE doctor_id = $1 AND status = 'waiting_doctor'
+          ORDER BY created_at
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED`,
+        [req.params.doctorId]
+      );
     if (!next.rows[0]) throw new Error('No patients in queue.');
 
     const current = await client.query(
@@ -981,7 +993,7 @@ app.post('/api/doctors/:doctorId/next', async (req, res) => {
       [req.params.doctorId, current.rows[0].id]
     );
     await client.query('COMMIT');
-    res.json({ current: current.rows[0] });
+    res.json({ current: current.rows[0], selected: selector || null });
   } catch (error) {
     await client.query('ROLLBACK');
     res.status(400).json({ error: error.message });
@@ -1090,14 +1102,26 @@ app.post('/api/labs/:labId/start', async (req, res) => {
     );
     if (active.rows[0].count >= lab.rows[0].capacity) throw new Error('Lab capacity is full.');
 
-    const next = await client.query(
-      `SELECT * FROM tokens
-        WHERE lab_id = $1 AND status = 'waiting_lab'
-        ORDER BY GREATEST(1, priority - FLOOR(EXTRACT(EPOCH FROM NOW() - created_at) / 300)), created_at
-        LIMIT 1
-        FOR UPDATE SKIP LOCKED`,
-      [req.params.labId]
-    );
+    const selector = String(req.body?.patient || '').trim();
+    const next = selector
+      ? await client.query(
+        `SELECT * FROM tokens
+          WHERE lab_id = $1
+            AND status = 'waiting_lab'
+            AND (token_number::text = $2 OR LOWER(patient_name) = LOWER($2))
+          ORDER BY GREATEST(1, priority - FLOOR(EXTRACT(EPOCH FROM NOW() - created_at) / 300)), created_at
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED`,
+        [req.params.labId, selector]
+      )
+      : await client.query(
+        `SELECT * FROM tokens
+          WHERE lab_id = $1 AND status = 'waiting_lab'
+          ORDER BY GREATEST(1, priority - FLOOR(EXTRACT(EPOCH FROM NOW() - created_at) / 300)), created_at
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED`,
+        [req.params.labId]
+      );
     if (!next.rows[0]) throw new Error('No patients in lab queue.');
 
     const current = await client.query(
@@ -1109,7 +1133,7 @@ app.post('/api/labs/:labId/start', async (req, res) => {
       [req.params.labId, current.rows[0].id]
     );
     await client.query('COMMIT');
-    res.json({ current: current.rows[0] });
+    res.json({ current: current.rows[0], selected: selector || null });
   } catch (error) {
     await client.query('ROLLBACK');
     res.status(400).json({ error: error.message });
