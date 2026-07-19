@@ -1670,6 +1670,7 @@ function DoctorPage({ doctorAction, doctorUser, hospitalLabs }) {
       </label>
       <div className="action-group">
         <button type="button" onClick={() => doctorAction('next', { patient: patientTarget.trim() })} disabled={doctorUser.on_break || doctorUser.current}>Next Patient</button>
+        <button type="button" onClick={() => doctorAction('defer')} disabled={!doctorUser.current}>Push Back 5</button>
         <button type="button" onClick={() => doctorAction('send-lab', { labId: hospitalLabs[0]?.id })} disabled={!doctorUser.current}>Send To Lab Queue</button>
         <button type="button" onClick={() => doctorAction('finish')} disabled={!doctorUser.current}>Finish Patient</button>
         <button type="button" onClick={() => doctorAction('break')}>{doctorUser.on_break ? 'End Break' : 'Take Break'}</button>
@@ -1705,7 +1706,12 @@ function LabPage({ labAction, labUser }) {
       <QueueList
         title="Active patients"
         items={labUser.active_patients}
-        action={(patient) => <button type="button" onClick={() => labAction('finish', { patientId: patient.id })}>Finish</button>}
+        action={(patient) => (
+          <div className="button-row">
+            <button type="button" onClick={() => labAction('finish', { patientId: patient.id })}>Finish</button>
+            <button type="button" onClick={() => labAction('defer', { patientId: patient.id })}>Push Back 5</button>
+          </div>
+        )}
       />
       <QueueList title="Waiting patients" items={labUser.queue} showPriority />
     </section>

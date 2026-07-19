@@ -77,6 +77,110 @@ async function estimateLabWait(client, labId) {
   return Math.ceil(waiting.rows[0].count / capacity) * DEFAULT_LAB_MINUTES;
 }
 
+async function deferDoctorToken(client, doctorId) {
+  const current = await client.query(
+    `SELECT * FROM tokens
+      WHERE doctor_id = $1 AND status = 'in_doctor'
+      FOR UPDATE`,
+    [doctorId]
+  );
+  if (!current.rows[0]) throw new Error('No current patient to push back.');
+
+  const waiting = await client.query(
+    `SELECT COUNT(*)::int AS count, MAX(created_at) AS max_created_at
+       FROM tokens
+      WHERE doctor_id = $1 AND status = 'waiting_doctor'`,
+    [doctorId]
+  );
+
+  const shouldSendToEnd = waiting.rows[0].count < 5;
+  const target = shouldSendToEnd
+    ? null
+    : await client.query(
+      `SELECT created_at
+         FROM tokens
+        WHERE doctor_id = $1 AND status = 'waiting_doctor'
+        ORDER BY created_at
+        OFFSET 4
+        LIMIT 1`,
+      [doctorId]
+    );
+
+  const nextCreatedAt = shouldSendToEnd
+    ? new Date((waiting.rows[0].max_created_at ? new Date(waiting.rows[0].max_created_at).getTime() : Date.now()) + 1)
+    : new Date(new Date(target.rows[0].created_at).getTime() + 1);
+
+  const moved = await client.query(
+    `UPDATE tokens
+        SET status = 'waiting_doctor',
+            started_at = NULL,
+            created_at = $2
+      WHERE id = $1
+      RETURNING *`,
+    [current.rows[0].id, nextCreatedAt]
+  );
+
+  await client.query(
+    "INSERT INTO activity_logs (actor_role, actor_id, token_id, action) VALUES ('doctor', $1, $2, 'push_back_patient')",
+    [doctorId, moved.rows[0].id]
+  );
+
+  return moved.rows[0];
+}
+
+async function deferLabToken(client, labId, patientId) {
+  const current = await client.query(
+    `SELECT * FROM tokens
+      WHERE lab_id = $1 AND id = $2 AND status = 'in_lab'
+      FOR UPDATE`,
+    [labId, patientId]
+  );
+  if (!current.rows[0]) throw new Error('No active lab patient to push back.');
+
+  const waiting = await client.query(
+    `SELECT COUNT(*)::int AS count,
+            MAX(GREATEST(1, priority - FLOOR(EXTRACT(EPOCH FROM (NOW() - created_at)) / 300)))::int AS max_key
+       FROM tokens
+      WHERE lab_id = $1 AND status = 'waiting_lab'`,
+    [labId]
+  );
+
+  const shouldSendToEnd = waiting.rows[0].count < 5;
+  const target = shouldSendToEnd
+    ? null
+    : await client.query(
+      `SELECT GREATEST(1, priority - FLOOR(EXTRACT(EPOCH FROM (NOW() - created_at)) / 300))::int AS sort_key
+         FROM tokens
+        WHERE lab_id = $1 AND status = 'waiting_lab'
+        ORDER BY GREATEST(1, priority - FLOOR(EXTRACT(EPOCH FROM (NOW() - created_at)) / 300)), created_at
+        OFFSET 4
+        LIMIT 1`,
+      [labId]
+    );
+
+  const nextPriority = shouldSendToEnd
+    ? (waiting.rows[0].max_key || 0) + 1
+    : (target.rows[0].sort_key || 0) + 1;
+
+  const moved = await client.query(
+    `UPDATE tokens
+        SET status = 'waiting_lab',
+            started_at = NULL,
+            priority = $2,
+            created_at = NOW()
+      WHERE id = $1
+      RETURNING *`,
+    [current.rows[0].id, nextPriority]
+  );
+
+  await client.query(
+    "INSERT INTO activity_logs (actor_role, actor_id, token_id, action) VALUES ('lab', $1, $2, 'push_back_patient')",
+    [labId, moved.rows[0].id]
+  );
+
+  return moved.rows[0];
+}
+
 async function createSchema() {
   await query(`
     CREATE TABLE IF NOT EXISTS hospitals (
@@ -1002,6 +1106,25 @@ app.post('/api/doctors/:doctorId/next', async (req, res) => {
   }
 });
 
+app.post('/api/doctors/:doctorId/defer', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const doctor = await client.query('SELECT * FROM doctors WHERE id = $1 FOR UPDATE', [req.params.doctorId]);
+    if (!doctor.rows[0]) throw new Error('Doctor not found.');
+    if (doctor.rows[0].on_break) throw new Error('Doctor is on break.');
+
+    const moved = await deferDoctorToken(client, req.params.doctorId);
+    await client.query('COMMIT');
+    res.json({ moved });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: error.message });
+  } finally {
+    client.release();
+  }
+});
+
 app.post('/api/doctors/:doctorId/send-lab', async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1134,6 +1257,26 @@ app.post('/api/labs/:labId/start', async (req, res) => {
     );
     await client.query('COMMIT');
     res.json({ current: current.rows[0], selected: selector || null });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/labs/:labId/defer', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const lab = await client.query('SELECT * FROM labs WHERE id = $1 FOR UPDATE', [req.params.labId]);
+    if (!lab.rows[0]) throw new Error('Lab not found.');
+    const patientId = Number(req.body?.patientId);
+    if (!patientId) throw new Error('Choose an active lab patient first.');
+
+    const moved = await deferLabToken(client, req.params.labId, patientId);
+    await client.query('COMMIT');
+    res.json({ moved });
   } catch (error) {
     await client.query('ROLLBACK');
     res.status(400).json({ error: error.message });
