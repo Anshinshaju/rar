@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 
 const API = 'https://rar-9k26.onrender.com/api';
 const NOMINATIM = 'https://nominatim.openstreetmap.org/search';
@@ -1294,80 +1294,99 @@ function TimeStatus({ status }) {
   );
 }
 
-function MapPreview({ userLocation, hospitalLocation, routeTarget }) {
+function MapPreview({ userLocation, hospitalLocation }) {
+  // keep map and layers persistent to avoid full re-inits on state refresh
+  const mapRef = useRef(null);
+  const userMarkerRef = useRef(null);
+  const hospitalMarkerRef = useRef(null);
+  const polyRef = useRef(null);
+
   useEffect(() => {
     if (!window.L) return;
     const id = 'patient-map';
     const container = document.getElementById(id);
     if (!container) return;
-    container.innerHTML = '';
-    const map = window.L.map(container, { zoomControl: false, attributionControl: false }).setView([20, 78], 3);
-    window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors'
-    }).addTo(map);
-    const markers = [];
-    let poly = null;
-    try {
-      if (hospitalLocation) {
-        const m = window.L.marker([hospitalLocation.latitude, hospitalLocation.longitude]).addTo(map).bindPopup('Hospital');
-        markers.push(m);
-      }
-      if (userLocation) {
-        const m2 = window.L.marker([userLocation.latitude, userLocation.longitude]).addTo(map).bindPopup('You');
-        markers.push(m2);
-      }
 
-      async function drawRoute(from, to) {
-        try {
-          const url = `${OSRM}/${from.longitude},${from.latitude};${to.longitude},${to.latitude}?overview=full&geometries=geojson`;
-          const resp = await fetch(url);
-          const json = await resp.json();
-          const coords = json.routes?.[0]?.geometry?.coordinates;
-          if (coords && coords.length) {
-            const latlngs = coords.map(([lon, lat]) => [lat, lon]);
-            poly = window.L.polyline(latlngs, { color: '#00ff99', weight: 4, opacity: 0.8 }).addTo(map);
-            return;
+    if (!mapRef.current) {
+      mapRef.current = window.L.map(container, { zoomControl: false, attributionControl: false }).setView([20, 78], 3);
+      window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(mapRef.current);
+    }
+
+    const map = mapRef.current;
+
+    function updateMarkers() {
+      try {
+        if (hospitalLocation) {
+          if (!hospitalMarkerRef.current) hospitalMarkerRef.current = window.L.marker([hospitalLocation.latitude, hospitalLocation.longitude]).addTo(map).bindPopup('Hospital');
+          else hospitalMarkerRef.current.setLatLng([hospitalLocation.latitude, hospitalLocation.longitude]);
+        } else if (hospitalMarkerRef.current) { map.removeLayer(hospitalMarkerRef.current); hospitalMarkerRef.current = null; }
+
+        if (userLocation) {
+          if (!userMarkerRef.current) userMarkerRef.current = window.L.marker([userLocation.latitude, userLocation.longitude]).addTo(map).bindPopup('You');
+          else userMarkerRef.current.setLatLng([userLocation.latitude, userLocation.longitude]);
+        } else if (userMarkerRef.current) { map.removeLayer(userMarkerRef.current); userMarkerRef.current = null; }
+
+        // if no active route, fit bounds to markers
+        if (!window.__queuepilot_route_target) {
+          const items = [hospitalMarkerRef.current, userMarkerRef.current].filter(Boolean);
+          if (items.length) {
+            try { map.fitBounds(window.L.featureGroup(items).getBounds().pad(0.5)); } catch (e) {}
           }
-        } catch (e) {
-          // fallthrough to straight line
+        }
+      } catch (e) { }
+    }
+
+    async function updateRoute() {
+      try {
+        const target = window.__queuepilot_route_target || null;
+        if (!target || !userLocation) {
+          if (polyRef.current) { try { map.removeLayer(polyRef.current); } catch (e) {} polyRef.current = null; }
+          return;
+        }
+        // avoid redrawing same route; request geometry + summary
+        const url = `${OSRM}/${userLocation.longitude},${userLocation.latitude};${target.longitude},${target.latitude}?overview=full&geometries=geojson`;
+        const resp = await fetch(url);
+        const json = await resp.json();
+        const route = json.routes?.[0];
+        const coords = route?.geometry?.coordinates;
+        if (coords && coords.length) {
+          const latlngs = coords.map(([lon, lat]) => [lat, lon]);
+          if (polyRef.current) { try { map.removeLayer(polyRef.current); } catch (e) {} }
+          polyRef.current = window.L.polyline(latlngs, { color: '#00ff99', weight: 4, opacity: 0.9 }).addTo(map);
+          // show ETA popup at poly center
+          try {
+            const minutes = Math.max(1, Math.round((route.duration || 0) / 60));
+            const distKm = ((route.distance || 0) / 1000).toFixed(1);
+            polyRef.current.bindPopup(`${minutes} min • ${distKm} km`).openPopup();
+          } catch (e) {}
+          const items = [polyRef.current].concat([userMarkerRef.current, hospitalMarkerRef.current].filter(Boolean));
+          try { map.fitBounds(window.L.featureGroup(items).getBounds().pad(0.5)); } catch (e) {}
+          return;
         }
         // fallback straight line
-        const straight = [ [from.latitude, from.longitude], [to.latitude, to.longitude] ];
-        poly = window.L.polyline(straight, { color: '#00ff99', weight: 3, dashArray: '6,6' }).addTo(map);
-      }
-
-      // listen to global route target events if routeTarget not passed directly
-      const effectiveRouteTarget = routeTarget || window.__queuepilot_route_target || null;
-      if (markers.length) {
-        const group = window.L.featureGroup(markers);
-        if (effectiveRouteTarget && userLocation) {
-          drawRoute(userLocation, effectiveRouteTarget).then(() => {
-            try {
-              map.fitBounds(group.getBounds().pad(0.5));
-            } catch (e) {}
-          });
-        } else {
-          try { map.fitBounds(group.getBounds().pad(0.5)); } catch (e) { }
-        }
-      }
-      function onRouteChange() {
-        // re-render map by re-dispatching effect — simple way: call drawRoute again
-        const newTarget = window.__queuepilot_route_target || null;
-        if (newTarget && userLocation) {
-          drawRoute(userLocation, newTarget);
-        } else {
-          try { if (poly) { map.removeLayer(poly); poly = null; } } catch (e) {}
-        }
-      }
-      window.addEventListener('queuepilot:routechange', onRouteChange);
-    } catch (e) {
-      // ignore map placement errors
+        if (polyRef.current) { try { map.removeLayer(polyRef.current); } catch (e) {} }
+        polyRef.current = window.L.polyline([[userLocation.latitude, userLocation.longitude], [target.latitude, target.longitude]], { color: '#00ff99', weight: 3, dashArray: '6,6' }).addTo(map);
+        try {
+          const estKm = distanceKm(userLocation, target).toFixed(1);
+          const estMinutes = Math.max(1, Math.round((distanceKm(userLocation, target) / 28) * 60));
+          polyRef.current.bindPopup(`${estMinutes} min • ${estKm} km (estimate)`).openPopup();
+        } catch (e) {}
+      } catch (e) { }
     }
+
+    const onRouteChange = () => { updateRoute(); };
+    window.addEventListener('queuepilot:routechange', onRouteChange);
+
+    updateMarkers();
+    updateRoute();
+
     return () => {
       try { window.removeEventListener('queuepilot:routechange', onRouteChange); } catch (e) {}
-      try { map.off(); map.remove(); } catch (e) {}
+      try { if (userMarkerRef.current) { map.removeLayer(userMarkerRef.current); userMarkerRef.current = null; } } catch (e) {}
+      try { if (hospitalMarkerRef.current) { map.removeLayer(hospitalMarkerRef.current); hospitalMarkerRef.current = null; } } catch (e) {}
+      try { if (polyRef.current) { map.removeLayer(polyRef.current); polyRef.current = null; } } catch (e) {}
     };
-  }, [userLocation, hospitalLocation, routeTarget]);
+  }, [userLocation, hospitalLocation]);
 
   return <div id="patient-map" style={{ height: '200px', width: '100%', borderRadius: 6, overflow: 'hidden' }} />;
 }
