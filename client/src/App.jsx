@@ -195,6 +195,16 @@ async function geocodeWithGoogle(address) {
   };
 }
 
+async function reverseGeocode(lat, lon) {
+  try {
+    const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);
+    const data = await response.json();
+    return data.display_name || '';
+  } catch (e) {
+    return '';
+  }
+}
+
 function titleRole(role) {
   return role ? role[0].toUpperCase() + role.slice(1) : '';
 }
@@ -212,6 +222,9 @@ function App() {
   const [message, setMessage] = useState('');
   const [eta, setEta] = useState(null);
   const [patientTokens, setPatientTokens] = useState([]);
+  const [mapPickerOpen, setMapPickerOpen] = useState(false);
+  const [mapPickerInitial, setMapPickerInitial] = useState(null);
+  const [mapPickerCallback, setMapPickerCallback] = useState(null);
   const [editingTarget, setEditingTarget] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
   const [travelInfo, setTravelInfo] = useState(null);
@@ -672,6 +685,18 @@ function App() {
     }
   }
 
+  function openMapPicker(initial, cb) {
+    setMapPickerInitial(initial || null);
+    setMapPickerCallback(() => cb);
+    setMapPickerOpen(true);
+  }
+
+  function closeMapPicker() {
+    setMapPickerOpen(false);
+    setMapPickerInitial(null);
+    setMapPickerCallback(null);
+  }
+
   async function geocodeProfileLocation(event) {
     event?.preventDefault();
     if (!profileForm.locationAddress.trim()) {
@@ -708,7 +733,10 @@ function App() {
         body: JSON.stringify({
           name: profileForm.name,
           username: profileForm.username,
-          password: profileForm.password
+          password: profileForm.password,
+          locationAddress: profileForm.locationAddress,
+          latitude: profileForm.latitude,
+          longitude: profileForm.longitude
         })
       });
       setCurrentUser(data.user);
@@ -845,6 +873,8 @@ function App() {
 
       <Page route={route} {...pageProps} />
 
+      <MapPicker open={mapPickerOpen} initial={mapPickerInitial} onPick={(picked) => { if (typeof mapPickerCallback === 'function') mapPickerCallback(picked); }} onClose={closeMapPicker} />
+
       {message && <div className="toast">{message}</div>}
     </main>
   );
@@ -929,6 +959,12 @@ function RegisterPage({ form, geocodeHospitalLocation, locationBusy, setForm, su
                   }}>
                     Open in Google Maps
                   </button>
+                  <button type="button" className="small-button" onClick={() => openMapPicker(hasCoords(form) ? { latitude: Number(form.latitude), longitude: Number(form.longitude) } : null, (picked) => {
+                    setForm((prev) => ({ ...prev, latitude: picked.latitude, longitude: picked.longitude, locationAddress: picked.label || prev.locationAddress }));
+                    setMessage('Map selection saved to form.');
+                  })}>
+                    Pick On Map
+                  </button>
                   {hasCoords(form) && <span className="panel-note">Map point ready</span>}
                 </div>
                 <div className="coordinate-grid">
@@ -980,9 +1016,18 @@ function PatientPage({ currentUser, deleteToken, locationBusy, patientTokens, pr
             <label>Name<input value={profileForm.name} onChange={(event) => setProfileForm({ ...profileForm, name: event.target.value })} /></label>
             <label>Username<input value={profileForm.username} onChange={(event) => setProfileForm({ ...profileForm, username: event.target.value })} /></label>
             <label>New password<input type="password" placeholder="Leave blank to keep old password" value={profileForm.password} onChange={(event) => setProfileForm({ ...profileForm, password: event.target.value })} /></label>
+            <div className="coordinate-grid">
+              <label>Latitude<input type="number" step="any" value={profileForm.latitude} onChange={(event) => setProfileForm({ ...profileForm, latitude: event.target.value })} /></label>
+              <label>Longitude<input type="number" step="any" value={profileForm.longitude} onChange={(event) => setProfileForm({ ...profileForm, longitude: event.target.value })} /></label>
+            </div>
             <div className="button-row">
               <button type="submit">Save Profile</button>
               <button type="button" className="small-button" onClick={() => setProfileOpen(false)}>Cancel</button>
+              <button type="button" className="small-button" onClick={() => openMapPicker(hasCoords(profileForm) ? { latitude: Number(profileForm.latitude), longitude: Number(profileForm.longitude) } : null, async (picked) => {
+                const label = picked.label || await reverseGeocode(picked.latitude, picked.longitude);
+                setProfileForm((prev) => ({ ...prev, latitude: picked.latitude, longitude: picked.longitude, locationAddress: label }));
+                setMessage('Home location selected from map. Save profile to persist.');
+              })}>Pick Home On Map</button>
             </div>
           </form>
         )}
@@ -1222,6 +1267,64 @@ function TimeStatus({ status }) {
   );
 }
 
+function MapPicker({ open, initial, onPick, onClose, title }) {
+  const id = 'map-picker';
+  useEffect(() => {
+    if (!open) return;
+    if (!window.L) return;
+    const container = document.getElementById(id);
+    if (!container) return;
+    container.innerHTML = '';
+    const map = window.L.map(container).setView([initial?.latitude || 20, initial?.longitude || 78], initial ? 14 : 3);
+    window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+    let marker = null;
+    if (initial) {
+      marker = window.L.marker([initial.latitude, initial.longitude]).addTo(map);
+    }
+    function onMapClick(e) {
+      if (marker) map.removeLayer(marker);
+      marker = window.L.marker(e.latlng).addTo(map);
+      map.panTo(e.latlng);
+    }
+    map.on('click', onMapClick);
+    window._lastLeafletMap = map;
+    return () => {
+      try { map.off(); map.remove(); } catch (e) {}
+    };
+  }, [open, initial, id]);
+
+  if (!open) return null;
+  return (
+    <div className="modal-overlay">
+      <div className="modal">
+        <div className="modal-header">
+          <h3>{title || 'Pick a location on the map'}</h3>
+          <button className="small-button" onClick={onClose}>Close</button>
+        </div>
+        <div id={id} style={{ height: '400px', width: '100%' }} />
+        <div className="button-row">
+          <button type="button" onClick={async () => {
+            if (!window.L) return;
+            const map = window._lastLeafletMap || window.L.map(document.getElementById(id));
+            // find marker
+            const markers = [];
+            map.eachLayer((layer) => { if (layer instanceof window.L.Marker) markers.push(layer); });
+            const m = markers[markers.length - 1];
+            if (!m) { alert('Click on map to place marker first.'); return; }
+            const latlng = m.getLatLng();
+            const label = await reverseGeocode(latlng.lat, latlng.lng);
+            onPick({ latitude: latlng.lat, longitude: latlng.lng, label });
+            onClose();
+          }}>Pick location</button>
+          <button type="button" className="small-button" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function HospitalPage({ createDoctor, createLab, form, geocodeHospitalLocation, geocodeProfileLocation, hospitalDoctors, hospitalLabs, hospitalProfile, locationBusy, profileForm, profileOpen, saveHospitalLocation, setForm, setProfileForm, setProfileOpen, updateHospitalProfile, deleteDoctor, deleteLab, editDoctor, editLab, cancelEdit, editingTarget }) {
   return (
     <>
@@ -1250,6 +1353,13 @@ function HospitalPage({ createDoctor, createLab, form, geocodeHospitalLocation, 
               <div className="button-row">
                 <button type="button" className="small-button" onClick={geocodeProfileLocation} disabled={locationBusy}>
                   {locationBusy ? 'Finding...' : 'Find Address On Map'}
+                </button>
+                <button type="button" className="small-button" onClick={() => openMapPicker(hasCoords(profileForm) ? { latitude: Number(profileForm.latitude), longitude: Number(profileForm.longitude) } : null, async (picked) => {
+                  const label = picked.label || await reverseGeocode(picked.latitude, picked.longitude);
+                  setProfileForm((prev) => ({ ...prev, latitude: picked.latitude, longitude: picked.longitude, locationAddress: label }));
+                  setMessage('Hospital map location picked. Save profile to persist.');
+                })}>
+                  Pick On Map
                 </button>
                 {hasCoords(profileForm) && <span className="panel-note">Map point ready</span>}
               </div>

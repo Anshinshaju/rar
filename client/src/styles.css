@@ -457,6 +457,26 @@ button:disabled {
   align-items: center;
 }
 
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+}
+
+.modal {
+  width: min(900px, calc(100% - 48px));
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 14px;
+  border-radius: 12px;
+}
+
+.modal-header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px }
+
 .small-button {
   min-width: 110px;
   padding: 8px 14px;

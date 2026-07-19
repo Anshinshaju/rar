@@ -109,6 +109,9 @@ async function createSchema() {
       hospital_id INTEGER REFERENCES hospitals(id) ON DELETE CASCADE,
       doctor_id INTEGER,
       lab_id INTEGER,
+      location_address TEXT NOT NULL DEFAULT '',
+      latitude DOUBLE PRECISION,
+      longitude DOUBLE PRECISION,
       travel_minutes INTEGER NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
@@ -122,6 +125,9 @@ async function createSchema() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS hospital_id INTEGER;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS doctor_id INTEGER;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS lab_id INTEGER;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS location_address TEXT NOT NULL DEFAULT '';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS travel_minutes INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
   `);
@@ -495,10 +501,14 @@ app.patch('/api/users/:userId/profile', async (req, res) => {
       `UPDATE users
           SET name = $1,
               username = $2,
-              password = CASE WHEN $3 = '' THEN password ELSE $3 END
-        WHERE id = $4 AND role = 'patient'
+              password = CASE WHEN $3 = '' THEN password ELSE $3 END,
+              location_address = $4,
+              latitude = $5,
+              longitude = $6
+        WHERE id = $7 AND role = 'patient'
         RETURNING *`,
-      [req.body.name, req.body.username, req.body.password || '', req.params.userId]
+      [req.body.name, req.body.username, req.body.password || '', req.body.locationAddress || '',
+       req.body.latitude == null ? null : Number(req.body.latitude), req.body.longitude == null ? null : Number(req.body.longitude), req.params.userId]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Patient not found.' });
     res.json({ user: sanitizeUser(result.rows[0]) });
