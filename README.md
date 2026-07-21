@@ -44,3 +44,7 @@ The server creates the tables automatically on startup. The default admin login 
 - Doctors can call the next patient, send the current patient to the lab queue, finish the patient, and take or end breaks.
 - Labs can process multiple active patients up to the hospital-configured capacity.
 - Admin can view all main database tables from the app.
+
+## Project Status
+
+This project is currently under active development. Features and documentation will continue to be improved.
